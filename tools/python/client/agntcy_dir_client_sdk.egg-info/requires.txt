@@ -1,0 +1,2 @@
+agntcy-dir-proto-stubs
+pytest
