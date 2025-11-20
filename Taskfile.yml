@@ -17,7 +17,7 @@ vars:
   IMAGE_REPO: '{{ .IMAGE_REPO | default "ghcr.io/agntcy" }}'
   IMAGE_TAG: "{{ .IMAGE_TAG | default .COMMIT_SHA }}"
   IMAGE_BAKE_ENV: "IMAGE_REPO={{.IMAGE_REPO}} IMAGE_TAG={{.IMAGE_TAG}}"
-  IMAGE_BAKE_OPTS: '{{ .IMAGE_BAKE_OPTS | default "" }}'
+  IMAGE_BAKE_OPTS: '{{ .IMAGE_BAKE_OPTS | default "--allow=fs.read=.." }}'
   BAKE_ENV: '{{ .IMAGE_BAKE_ENV }} EXTRA_LDFLAGS="{{.VERSION_LDFLAGS}}"'
   COVERAGE_IMAGE_TAG: "{{ .IMAGE_TAG | default .COMMIT_SHA }}-coverage"
   COVERAGE_IMAGE_BAKE_ENV: "IMAGE_REPO={{.IMAGE_REPO}} IMAGE_TAG={{.COVERAGE_IMAGE_TAG}}"
@@ -609,7 +609,7 @@ tasks:
         # Build extraEnv JSON array
         EXTRA_ENV_JSON='[]'
         {{ if eq .E2E_COVERAGE_ENABLED "true" }}EXTRA_ENV_JSON=$(echo "$EXTRA_ENV_JSON" | jq '. += [{"name":"GOCOVERDIR","value":"/tmp/coverage"}]'){{ end }}
-        {{ if .DIRECTORY_SERVER_SCHEMA_URL }}EXTRA_ENV_JSON=$(echo "$EXTRA_ENV_JSON" | jq '. += [{"name":"DIRECTORY_SERVER_SCHEMA_URL","value":"{{ .DIRECTORY_SERVER_SCHEMA_URL }}"}]'){{ end }}
+        {{ if ne .DIRECTORY_SERVER_SCHEMA_URL nil }}EXTRA_ENV_JSON=$(echo "$EXTRA_ENV_JSON" | jq '. += [{"name":"DIRECTORY_SERVER_SCHEMA_URL","value":"{{ .DIRECTORY_SERVER_SCHEMA_URL }}"}]'){{ end }}
 
         {{ .HELM_BIN }} upgrade dir \
           {{ .HELM_CHART_PATH }} \
@@ -1069,6 +1069,7 @@ tasks:
           DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          DIRECTORY_SERVER_SCHEMA_URL: "" #TODO: Explicitly disable for e2e tests, remove when fix in oasf-sdk is released
           E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - task: deploy:kubernetes:local:port-forward
       - |
@@ -1112,6 +1113,7 @@ tasks:
           DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          DIRECTORY_SERVER_SCHEMA_URL: "" #TODO: Explicitly disable for e2e tests, remove when fix in oasf-sdk is released
           E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - task: deploy:kubernetes:local:port-forward
       - |
@@ -1155,6 +1157,7 @@ tasks:
           DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
           DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          DIRECTORY_SERVER_SCHEMA_URL: "" #TODO: Explicitly disable for e2e tests, remove when fix in oasf-sdk is released
           E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - task: deploy:kubernetes:local:port-forward
       # Run client library tests first (faster feedback)
