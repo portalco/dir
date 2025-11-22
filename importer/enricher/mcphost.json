@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "dir-mcp-server": {
+      "command": "dirctl",
+      "args": [
+        "mcp",
+        "serve"
+      ]
+    }
+  },
+  "model": "ollama:qwen3:8b"
+}

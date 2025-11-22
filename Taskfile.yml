@@ -1,7 +1,7 @@
 # Copyright AGNTCY Contributors (https://github.com/agntcy)
 # SPDX-License-Identifier: Apache-2.0
 
-version: '3'
+version: "3"
 
 vars:
   ## Version
@@ -11,38 +11,53 @@ vars:
   COMMIT_SHA:
     sh: git rev-parse --short HEAD
   COMMIT_SHA_LDFLAG: "-X 'github.com/agntcy/dir/api/version.CommitHash={{ .COMMIT_SHA }}'"
-  VERSION_LDFLAGS: '{{ .RELEASE_VERSION_LDFLAG }} {{ .COMMIT_SHA_LDFLAG }}'
+  VERSION_LDFLAGS: "{{ .RELEASE_VERSION_LDFLAG }} {{ .COMMIT_SHA_LDFLAG }}"
 
   ## Image config
   IMAGE_REPO: '{{ .IMAGE_REPO | default "ghcr.io/agntcy" }}'
-  IMAGE_TAG: '{{ .IMAGE_TAG | default .COMMIT_SHA }}'
-  IMAGE_BAKE_ENV: 'IMAGE_REPO={{.IMAGE_REPO}} IMAGE_TAG={{.IMAGE_TAG}}'
+  IMAGE_TAG: "{{ .IMAGE_TAG | default .COMMIT_SHA }}"
+  IMAGE_BAKE_ENV: "IMAGE_REPO={{.IMAGE_REPO}} IMAGE_TAG={{.IMAGE_TAG}}"
   IMAGE_BAKE_OPTS: '{{ .IMAGE_BAKE_OPTS | default "" }}'
   BAKE_ENV: '{{ .IMAGE_BAKE_ENV }} EXTRA_LDFLAGS="{{.VERSION_LDFLAGS}}"'
+  COVERAGE_IMAGE_TAG: "{{ .IMAGE_TAG | default .COMMIT_SHA }}-coverage"
+  COVERAGE_IMAGE_BAKE_ENV: "IMAGE_REPO={{.IMAGE_REPO}} IMAGE_TAG={{.COVERAGE_IMAGE_TAG}}"
+  COVERAGE_BAKE_ENV: '{{ .COVERAGE_IMAGE_BAKE_ENV }} EXTRA_LDFLAGS="{{.VERSION_LDFLAGS}}"'
+  COVERAGE_PKGS: '{{ .COVERAGE_PKGS | default "github.com/agntcy/dir/api/...,github.com/agntcy/dir/cli/...,github.com/agntcy/dir/client/...,github.com/agntcy/dir/hub/...,github.com/agntcy/dir/importer/...,github.com/agntcy/dir/utils/..." }}'
 
   ## Dependency config
-  BIN_DIR: '{{ .ROOT_DIR }}/bin'
-  HELM_VERSION: '3.16.3'
-  HELM_BIN: '{{ .BIN_DIR }}/helm-{{.HELM_VERSION}}'
-  KUBECTL_VERSION: '1.31.3'
-  KUBECTL_BIN: '{{ .BIN_DIR }}/kubectl-{{.KUBECTL_VERSION}}'
-  KIND_VERSION: '0.25.0'
-  KIND_BIN: '{{ .BIN_DIR }}/kind-{{.KIND_VERSION}}'
-  PROTOC_VERSION: '27.1'
-  PROTOC_BIN: '{{ .BIN_DIR }}/protoc-{{.PROTOC_VERSION}}'
-  BUFBUILD_VERSION: '1.50.1'
-  BUFBUILD_BIN: '{{ .BIN_DIR }}/bufbuild-{{.BUFBUILD_VERSION}}'
-  GO_VERSION: '1.24.1'
-  MULTIMOD_VERSION: '0.17.0'
-  MULTIMOD_BIN: '{{ .BIN_DIR }}/multimod-{{.MULTIMOD_VERSION}}'
-  GOLANGCI_LINT_VERSION: '1.64.7'
-  GOLANGCI_LINT_BIN: '{{ .BIN_DIR }}/golangci-lint-{{.GOLANGCI_LINT_VERSION}}'
-  LICENSEI_VERSION: '0.9.0'
-  LICENSEI_BIN: '{{ .BIN_DIR }}/licensei-{{.LICENSEI_VERSION}}'
-  UV_VERSION: '0.6.1'
-  UV_BIN: '{{ .BIN_DIR }}/uv-{{.UV_VERSION}}'
-  HUB_API_VERSION: 'main'
-  HUB_REPO_URL: 'https://github.com/cisco-eti/phoenix-saas-be.git'
+  BIN_DIR: "{{ .ROOT_DIR }}/bin"
+  DIRCTL_BIN: "{{ .BIN_DIR}}/dirctl"
+  HELM_VERSION: "3.16.3"
+  HELM_BIN: "{{ .BIN_DIR }}/helm-{{.HELM_VERSION}}"
+  KUBECTL_VERSION: "1.31.3"
+  KUBECTL_BIN: "{{ .BIN_DIR }}/kubectl-{{.KUBECTL_VERSION}}"
+  KIND_VERSION: "0.25.0"
+  KIND_BIN: "{{ .BIN_DIR }}/kind-{{.KIND_VERSION}}"
+  PROTOC_VERSION: "27.1"
+  PROTOC_BIN: "{{ .BIN_DIR }}/protoc-{{.PROTOC_VERSION}}"
+  BUFBUILD_VERSION: "1.50.1"
+  BUFBUILD_BIN: "{{ .BIN_DIR }}/bufbuild-{{.BUFBUILD_VERSION}}"
+  GO_VERSION: "1.25.2"
+  MULTIMOD_VERSION: "0.17.0"
+  MULTIMOD_BIN: "{{ .BIN_DIR }}/multimod-{{.MULTIMOD_VERSION}}"
+  GOLANGCI_LINT_VERSION: "2.5.0"
+  GOLANGCI_LINT_BIN: "{{ .BIN_DIR }}/golangci-lint-{{.GOLANGCI_LINT_VERSION}}"
+  LICENSEI_VERSION: "0.9.0"
+  LICENSEI_BIN: "{{ .BIN_DIR }}/licensei-{{.LICENSEI_VERSION}}"
+  UV_VERSION: "0.8.23"
+  UV_BIN: "{{ .BIN_DIR }}/uv-{{.UV_VERSION}}"
+  UV_PUBLISH_TOKEN: '{{ .UV_PUBLISH_TOKEN | default "" }}'
+  COSIGN_VERSION: "2.5.3"
+  COSIGN_BIN: "{{ .BIN_DIR }}/cosign-{{.COSIGN_VERSION}}"
+  HUB_API_VERSION: "main"
+  ZOT_VERSION: "2.1.10"
+  SPIRE_VERSION: "1.13.3"
+
+  ## Go module discovery
+  GO_MOD_DIR:
+    sh: find . -name go.mod -not -path "./tmp*" -exec dirname {} \;
+  GO_MOD_DIR_UNIT_TEST:
+    sh: find . -name go.mod -not -path "./e2e*" -not -path "./tmp*" -exec dirname {} \;
 
 tasks:
   ##
@@ -70,14 +85,25 @@ tasks:
       - task: deps:tidy
       - task: gen
     vars:
-      GOARCH: '{{ .GOARCH | default ARCH }}'
+      GOARCH: "{{ .GOARCH | default ARCH }}"
+      EXTRA_FLAGS: '{{ .EXTRA_FLAGS | default "" }}'
     cmds:
-      - '{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set *.platform=linux/{{.GOARCH}}'
+      - "{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set *.platform=linux/{{.GOARCH}} {{.EXTRA_FLAGS}}"
+
+  build:coverage:
+    desc: Build images for all components with coverage instrumentation
+    cmds:
+      - task: build
+        vars:
+          BAKE_ENV: "{{ .COVERAGE_BAKE_ENV }}"
+          # TODO: -coverpkg should be set to include all packages (server, api, utils) in the coverage report
+          # but it's not working as expected, so we're using the default coverage package for now
+          EXTRA_FLAGS: 'coverage --set *.args.BUILD_OPTS="-cover -covermode=atomic"'
 
   build:all:
     desc: Build images for all components for multiple platforms
     cmds:
-      - '{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set *.platform=linux/amd64,linux/arm64'
+      - "{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set *.platform=linux/amd64,linux/arm64"
 
   pull:
     desc: Pull images for all components
@@ -94,42 +120,67 @@ tasks:
     prompt:
       - Are you sure you want to push the images to remote registry?
     cmds:
-      - '{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set=*.output=type=registry'
+      - "{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} --set=*.output=type=registry"
 
-  release:verify:
-    desc: Verify release readiness
-    deps:
-      - task: deps:multimod-bin
-    cmds:
-      - '{{ .MULTIMOD_BIN }} verify'
-
-  release:prepare:
+  release:create:
     desc: Prepare release
     deps:
       - task: deps:multimod-bin
+      - task: sdk:deps:python
+      - task: sdk:deps:javascript
+    vars:
+      RELEASE_VERSION: "{{ .RELEASE_VERSION }}"
     cmds:
-      - '{{ .MULTIMOD_BIN }} prerelease --all-module-sets --skip-go-mod-tidy=true --commit-to-different-branch=false'
+      # Switch to new branch
+      - 'if [ "$(git rev-parse --abbrev-ref HEAD)" != "release/{{.RELEASE_VERSION}}" ]; then git checkout -b release/{{.RELEASE_VERSION}}; fi'
+      # Update versions.yaml with the new version
+      - 'awk ''{gsub(/version: .*/,"version: {{.RELEASE_VERSION}}")}1'' versions.yaml > versions.yaml.tmp'
+      - "mv versions.yaml.tmp versions.yaml"
+      # Update SDK packages with the new version
+      - "cd sdk/dir-py && {{ .UV_BIN }} version {{.RELEASE_VERSION}} && cd -"
+      - "cd sdk/dir-js && npm version {{.RELEASE_VERSION}} --allow-same-version --no-git-tag-version && cd -"
+      # Add release changes
+      - |
+        git add .
+        git commit -S -m "release(dir): prepare release {{.RELEASE_VERSION}}"
+      # Verify Go release
+      - |
+        {{ .MULTIMOD_BIN }} verify
+        {{ .MULTIMOD_BIN }} prerelease --all-module-sets --skip-go-mod-tidy=true --commit-to-different-branch=false
+      # Push prepared release
+      - task: release:push
+
+  release:push:
+    internal: true
+    vars:
+      RELEASE_VERSION: "{{ .RELEASE_VERSION }}"
+    prompt:
+      - "Are you sure you want to push the release branch release/{{.RELEASE_VERSION}} to remote repository?"
+    cmds:
+      - |
+        git push --set-upstream origin release/{{.RELEASE_VERSION}} || true
 
   ##
   ## API
   ##
   api:gen:
     desc: Generates API stubs
-    dir: ./api
+    dir: ./proto
     deps:
       - task: deps:protoc
       - task: deps:bufbuild
     # NOTE(ramizpolic): This allows Taskfile YAML parsing to accept '{' as a starting command token.
     # In translation, this is interpreted as a regular multi-line shell script.
-    cmd: |
-      {{.BUFBUILD_BIN}} dep update
-      {{.BUFBUILD_BIN}} generate
+    cmds:
+      - "{{.BUFBUILD_BIN}} dep update"
+      - "{{.BUFBUILD_BIN}} generate"
 
   api:clean:
     desc: Clean generated API stubs
     deps:
       - api:clean:go
       - api:clean:python
+      - api:clean:javascript
 
   api:clean:go:
     desc: Clean generated golang API stubs
@@ -138,25 +189,14 @@ tasks:
       - find . \( -name "*.pb.go" \) -type f -delete
 
   api:clean:python:
-    desc: Clean generated python API stubs
-    dir: ./tools/python
-    cmds:
-      - find . \( -name "*_pb2_grpc.py" -o -name "*_pb2.py" -o -name "*_pb2.pyi" \) -type f -delete
+    desc: Clean generated Python API stubs
+    dir: ./sdk/dir-py/agntcy
+    cmd: rm -drf ./dir
 
-  api:test:
-    desc: Unit test API code
-    vars:
-      EXTRA_ARGS: '{{ .EXTRA_ARGS | default "" }}'
-    cmds:
-      - EXTRA_ARGS="{{.EXTRA_ARGS}}" task api:test:go
-
-  api:test:go:
-    desc: Unit test Go API code
-    vars:
-      EXTRA_ARGS: '{{ .EXTRA_ARGS | default "" }}'
-    dir: ./api
-    cmds:
-      - go -C . test ./... {{.EXTRA_ARGS}}
+  api:clean:javascript:
+    desc: Clean generated JS/TS API stubs
+    dir: ./sdk/dir-js/
+    cmd: rm -drf ./api
 
   ##
   ## CLI
@@ -165,11 +205,11 @@ tasks:
     desc: Compile CLI binaries
     dir: ./cli
     vars:
-      GOOS: '{{ .GOOS | default OS }}'
-      GOARCH: '{{ .GOARCH | default ARCH }}'
+      GOOS: "{{ .GOOS | default OS }}"
+      GOARCH: "{{ .GOARCH | default ARCH }}"
       BINARY_NAME: '{{ .BINARY_NAME | default "dirctl" }}'
       OUT_BINARY: '{{ if eq OS "windows" }}{{ .ROOT_DIR }}\\bin\\{{ .BINARY_NAME }}.exe{{ else }}{{ .ROOT_DIR }}/bin/{{ .BINARY_NAME }}{{ end }}'
-      LDFLAGS: '-s -w -extldflags -static {{ .VERSION_LDFLAGS }}'
+      LDFLAGS: "-s -w -extldflags -static {{ .VERSION_LDFLAGS }}"
     cmds:
       - CGO_ENABLED=0 GOOS={{.GOOS}} GOARCH={{.GOARCH}} go build -ldflags="{{ .LDFLAGS }}" -o "{{.OUT_BINARY}}" cli.go
 
@@ -179,8 +219,8 @@ tasks:
     cmds:
       - for:
           matrix:
-            OS: ['linux', 'darwin', 'windows']
-            ARCH: ['amd64', 'arm64']
+            OS: ["linux", "darwin", "windows"]
+            ARCH: ["amd64", "arm64"]
         cmd: |
           # Skip unsupported combinations (e.g., Windows ARM64)
           if [ "{{.ITEM.OS}}" = "windows" ] && [ "{{.ITEM.ARCH}}" = "arm64" ]; then
@@ -189,40 +229,194 @@ tasks:
             GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} BINARY_NAME=dirctl-{{.ITEM.OS}}-{{.ITEM.ARCH}} task cli:compile
           fi
 
-  cli:test:
-    desc: Unit test CLI code
-    dir: ./cli
-    cmds:
-      - go -C . test ./... {{.EXTRA_ARGS}}
-
   ##
   ## Client SDK
   ##
-  client:test:
-    desc: Unit test Client code
-    vars:
-      EXTRA_ARGS: '{{ .EXTRA_ARGS | default "" }}'
+  sdk:deps:common:
+    desc: Common dependencies for SDKs
     cmds:
-      - EXTRA_ARGS="{{.EXTRA_ARGS}}" task client:test:go
-      - task client:test:python
+      - task: deps:cosign
+      - task: cli:compile
+      - task: sdk:deps:javascript
+      - task: sdk:deps:python
 
-  client:test:go:
-    desc: Unit test Go Client code
-    dir: ./client
-    vars:
-      EXTRA_ARGS: '{{ .EXTRA_ARGS | default "" }}'
+  sdk:deps:cicd:iodc-token-generation:
+    desc: Get Fulcio OIDC token for CICD
+    requires:
+      vars: [CLIENT_ID]
     cmds:
-      - go -C . test ./... {{.EXTRA_ARGS}}
+      - |
+        OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r '.value')
 
-  client:test:python:
-    desc: Unit test Python Client code
+        CLIENT_ID="{{.CLIENT_ID}}"
+        PROVIDER_URL="https://token.actions.githubusercontent.com"
+
+        echo "OIDC_PROVIDER_URL=${PROVIDER_URL}"
+        echo "CLIENT_ID=${CLIENT_ID}"
+        echo "OIDC_TOKEN=${OIDC_TOKEN}"
+
+  sdk:build:all:
+    desc: Build all client SDK package
+    cmds:
+      - task: sdk:build:javascript
+      - task: sdk:build:python
+
+  sdk:build:python:
+    desc: Build python client SDK package
+    dir: ./sdk/dir-py
     deps:
-      - deps:uv
-    dir: ./tools/python/client/tests
-    env:
-      PYTHONPATH: '{{ .ROOT_DIR }}/tools/client/python/client/proto'
+      - task: sdk:deps:python
     cmds:
-      - '{{.UV_BIN}} run pytest test_client.py'
+      - "{{.UV_BIN}} build"
+
+  sdk:build:javascript:
+    desc: Build javascript client SDK package
+    dir: ./sdk/dir-js
+    deps:
+      - task: sdk:deps:javascript
+    cmds:
+      - npm run build
+
+  sdk:test-env:create:
+    desc: Create Kubernetes cluster test environment
+    cmds:
+      - task: deploy:kubernetes:local
+        vars:
+          DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: 1s
+      - task: deploy:kubernetes:local:port-forward
+
+  sdk:test-env:delete:
+    desc: Delete Kubernetes cluster test environment
+    cmds:
+      - task: deploy:kubernetes:local:port-forward:cleanup
+      - task: deploy:kubernetes:local:cleanup
+
+  sdk:test-env:spiffe:load-test-image:
+    desc: Load the SDK tests into KinD
+    deps:
+      - task: api:gen
+    vars:
+      GOARCH: "{{ .GOARCH | default ARCH }}"
+    cmds:
+      - "{{.BAKE_ENV}} docker buildx bake sdks-test --set *.platform=linux/{{.GOARCH}} {{.IMAGE_BAKE_OPTS}}"
+      - "{{.KUBECTL_BIN}} config use-context kind-dir.example"
+      - "{{.KIND_BIN}} load docker-image ghcr.io/agntcy/sdks-test:{{.IMAGE_TAG}} --name dir.example"
+
+  sdk:test:all:spiffe:
+    desc: Test all client SDK pacakges with spiffe
+    dir: ./e2e/sdk
+    cmds:
+      - "{{.KUBECTL_BIN}} config use-context kind-dir.example"
+      - "{{.HELM_BIN}} uninstall sdk-tests --wait --keep-history --ignore-not-found > /dev/null || true"
+      - "{{.HELM_BIN}} install --replace --timeout 1m --wait --wait-for-jobs sdk-tests ./chart -f chart/values.yaml --set image.tag={{.IMAGE_TAG}} > /dev/null || true"
+      - |
+        status=$({{.KUBECTL_BIN}} get job sdks-test -o jsonpath='{.status.conditions[0].type}')
+        status_value=$({{.KUBECTL_BIN}} get job sdks-test -o jsonpath='{.status.conditions[0].status}')
+
+        if [[ "$status" == "SuccessCriteriaMet" ]] && [[ "$status_value" == "True" ]]; then
+          echo "SDKs test are finished successfully! ✅"
+          exit 0
+        fi
+
+        if [[ "$status" == "FailureTarget" ]] && [[ "$status_value" == "True" ]]; then
+          {{.KUBECTL_BIN}} logs jobs/sdks-test
+          echo "SDKs test are failed! ❎"
+          exit 1
+        fi
+
+        echo "Unknown error happend, check logs! ⚠️"
+        exit 1
+
+  sdk:test:all:
+    desc: Test all client SDK packages
+    cmds:
+      - task: sdk:test:javascript
+      - task: sdk:test:python
+
+  sdk:test:python:
+    desc: Test python client SDK package
+    dir: ./sdk/dir-py
+    deps:
+      - task: sdk:deps:python
+    env:
+      KIND_CLUSTER_NAME: "sdk-py-test"
+    cmds:
+      - task: sdk:test-env:create
+      - defer: { task: sdk:test-env:delete }
+      - |
+        export DIRCTL_PATH="$(printf "%s" "${DIRCTL_PATH:-{{ .DIRCTL_BIN }}}")"
+        export COSIGN_PATH="$(printf "%s" "${COSIGN_PATH:-{{ .COSIGN_BIN }}}")"
+
+        '{{.UV_BIN}}' run pytest
+
+  sdk:test:javascript:
+    desc: Test javascript client SDK package
+    dir: ./sdk/dir-js
+    deps:
+      - task: sdk:deps:javascript
+    env:
+      KIND_CLUSTER_NAME: "sdk-js-test"
+    cmds:
+      - task: sdk:test-env:create
+      - defer: { task: sdk:test-env:delete }
+      - |
+        export DIRCTL_PATH="$(printf "%s" "${DIRCTL_PATH:-{{ .DIRCTL_BIN }}}")"
+        export COSIGN_PATH="$(printf "%s" "${COSIGN_PATH:-{{ .COSIGN_BIN }}}")"
+
+        npm run test
+
+  sdk:deps:python:
+    desc: Install deps for python SDK package
+    dir: ./sdk/dir-py
+    deps:
+      - task: deps:bufbuild
+      - task: deps:uv
+    cmds:
+      - task: api:gen
+      - "{{.UV_BIN}} sync --all-packages"
+
+  sdk:deps:javascript:
+    desc: Install deps for javascript SDK package
+    dir: ./sdk/dir-js
+    cmds:
+      - npm install
+      - task: api:gen
+
+  sdk:release:all:
+    desc: Release all client SDK package
+    env:
+      UV_PUBLISH_TOKEN: "{{ .UV_PUBLISH_TOKEN }}"
+      NODE_AUTH_TOKEN: "{{ .NODE_AUTH_TOKEN }}"
+    cmds:
+      - task: sdk:release:javascript
+      - task: sdk:release:python
+
+  sdk:release:python:
+    ignore_error: true # FIXME: Need to check if package version already exists
+    desc: Release python client SDK package
+    dir: ./sdk/dir-py
+    env:
+      UV_PUBLISH_TOKEN: "{{ .UV_PUBLISH_TOKEN }}"
+    deps:
+      - task: deps:uv
+    cmds:
+      - "{{.UV_BIN}} publish"
+
+  sdk:release:javascript:
+    ignore_error: true # FIXME: Need to check if package version already exists
+    desc: Release javascript client SDK package
+    dir: ./sdk/dir-js
+    env:
+      NODE_AUTH_TOKEN: "{{ .NODE_AUTH_TOKEN }}"
+    cmd: |
+      version=$(npm pkg get version) 
+
+      if [[ $version == *"rc"* ]]; then
+        npm publish --scope=@agntcy --access public --tag rc-{{.COMMIT_SHA}}
+      else
+        npm publish --scope=@agntcy --access public
+      fi
 
   ##
   ## Server
@@ -230,21 +424,35 @@ tasks:
   server:build:
     desc: Build Directory server image
     cmds:
-      - '{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} dir-apiserver'
+      - "{{.BAKE_ENV}} docker buildx bake {{.IMAGE_BAKE_OPTS}} dir-apiserver"
 
   server:start:
     desc: Start Directory server
     dir: server/cmd
+    env:
+      DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: 1s
     cmds:
       - defer: { task: server:store:stop }
       - task: server:store:start
       - go run main.go
 
+  server:store:pull:
+    desc: Pull local OCI registry server docker image
+    vars:
+      IMAGE: "{{.IMAGE}}"
+    cmds:
+      - |
+        docker pull {{.IMAGE}}
+
   server:store:start:
     desc: Start local OCI registry server for storage
     internal: true
     vars:
-      IMAGE: ghcr.io/project-zot/zot-linux-{{ARCH}}:v2.1.1
+      IMAGE: ghcr.io/project-zot/zot-linux-{{ARCH}}:v{{.ZOT_VERSION}}
+    deps:
+      - task: server:store:pull
+        vars:
+          IMAGE: "{{.IMAGE}}"
     cmds:
       - |
         # mount config
@@ -255,7 +463,7 @@ tasks:
             "rootDirectory": "/tmp/zot"
           },
           "http": {
-            "address": "127.0.0.1",
+            "address": "0.0.0.0",
             "port": "5000"
           },
           "log": {
@@ -263,10 +471,12 @@ tasks:
           },
           "extensions": {
             "search": {
+              "enable": true
+            },
+            "trust": {
               "enable": true,
-              "cve": {
-                "updateInterval": "24h"
-              }
+              "cosign": true,
+              "notation": false
             }
           }
         }
@@ -277,19 +487,13 @@ tasks:
               -it \
               --rm -d -p 5000:5000 \
               -v /tmp/config.json:/config.json:ro \
-              --name oci-registry {{.IMAGE}}
+              --name oci-registry {{.IMAGE}} serve /config.json
 
   server:store:stop:
     desc: Stop local OCI registry node
     internal: true
     cmds:
       - docker stop oci-registry
-
-  server:test:
-    desc: Unit test Directory server code
-    dir: ./server
-    cmds:
-      - go -C . test ./... {{.EXTRA_ARGS}}
 
   server:bench:
     desc: Benchmark Directory server code
@@ -301,7 +505,6 @@ tasks:
   ## Deploy
   ##
   deploy:kubernetes:setup-cluster:
-    internal: true
     desc: Create a kind cluster and load Docker images
     deps:
       - deps:helm
@@ -310,20 +513,65 @@ tasks:
     vars:
       KIND_CLUSTER_NAME: '{{ .KIND_CLUSTER_NAME | default "agntcy-cluster" }}'
       KIND_CREATE_OPTS: '{{ .KIND_CREATE_OPTS | default "" }}'
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      DEPLOY_BAKE_ENV: '{{ if eq .E2E_COVERAGE_ENABLED "true" }}{{ .COVERAGE_BAKE_ENV }}{{ else }}{{ .BAKE_ENV }}{{ end }}'
+      DEPLOY_BAKE_GROUP: '{{ if eq .E2E_COVERAGE_ENABLED "true" }}coverage{{ else }}default{{ end }}'
     cmds:
       # Create ephemeral cluster
-      - '{{ .KIND_BIN }} create cluster {{ .KIND_CREATE_OPTS }} --name {{ .KIND_CLUSTER_NAME }}'
-      - '{{ .KIND_BIN }} export kubeconfig --name {{ .KIND_CLUSTER_NAME }}'
+      - "{{ .KIND_BIN }} create cluster {{ .KIND_CREATE_OPTS }} --name {{ .KIND_CLUSTER_NAME }}"
+      - "{{ .KIND_BIN }} export kubeconfig --name {{ .KIND_CLUSTER_NAME }}"
 
       # Check cluster status
-      - '{{ .KUBECTL_BIN }} cluster-info'
+      - "{{ .KUBECTL_BIN }} cluster-info"
 
       # Import images
       - |
-        images=$({{.BAKE_ENV}} docker buildx bake default --print | jq -r '.target | with_entries(.value |= .tags[0]) | to_entries[] | .value')
+        images=$({{.DEPLOY_BAKE_ENV}} docker buildx bake {{.DEPLOY_BAKE_GROUP}} --print | jq -r '.target | with_entries(.value |= .tags[0]) | to_entries[] | .value')
         echo "$images" | while read image; do
           {{ .KIND_BIN }} load docker-image $image --name {{ .KIND_CLUSTER_NAME }}
         done
+
+  deploy:kubernetes:gen-htpasswd-creds:
+    desc: Generate htpasswd credentials and files for DIR deployment
+    vars:
+      HTPASSWD_USERNAME: '{{ .HTPASSWD_USERNAME | default "apiserver" }}'
+      HTPASSWD_SYNC_USERNAME: '{{ .HTPASSWD_SYNC_USERNAME | default "sync-user" }}'
+      CREDS_FILE: '{{ .CREDS_FILE | default "/tmp/dir-htpasswd-creds.env" }}'
+      HTPASSWD_FILE: '{{ .HTPASSWD_FILE | default "/tmp/dir-htpasswd" }}'
+    cmds:
+      - |
+        # Generate fresh passwords
+        HTPASSWD_PASSWORD="$(openssl rand -hex 16)"
+        HTPASSWD_SYNC_PASSWORD="$(openssl rand -hex 16)"
+
+        # Generate derived values
+        HTPASSWD_AUTH_HEADER="$(echo -n "{{ .HTPASSWD_USERNAME }}:${HTPASSWD_PASSWORD}" | base64)"
+        HTPASSWD_ADMIN="$(htpasswd -nbB "{{ .HTPASSWD_USERNAME }}" "${HTPASSWD_PASSWORD}" | sed 's/^{{ .HTPASSWD_USERNAME }}://')"
+        HTPASSWD_SYNC="$(htpasswd -nbB "{{ .HTPASSWD_SYNC_USERNAME }}" "${HTPASSWD_SYNC_PASSWORD}" | sed 's/^{{ .HTPASSWD_SYNC_USERNAME }}://')"
+
+        # Write credentials to env file (for helm --set commands)
+        cat > {{ .CREDS_FILE }} << EOF
+        export HTPASSWD_USERNAME="{{ .HTPASSWD_USERNAME }}"
+        export HTPASSWD_PASSWORD="${HTPASSWD_PASSWORD}"
+        export HTPASSWD_AUTH_HEADER="${HTPASSWD_AUTH_HEADER}"
+        export HTPASSWD_SYNC_USERNAME="{{ .HTPASSWD_SYNC_USERNAME }}"
+        export HTPASSWD_SYNC_PASSWORD="${HTPASSWD_SYNC_PASSWORD}"
+        EOF
+
+        # Write htpasswd file (for helm --set-file commands)
+        cat > {{ .HTPASSWD_FILE }} << EOF
+        {{ .HTPASSWD_USERNAME }}:${HTPASSWD_ADMIN}
+        {{ .HTPASSWD_SYNC_USERNAME }}:${HTPASSWD_SYNC}
+        EOF
+
+  deploy:kubernetes:cleanup-htpasswd-creds:
+    desc: Cleanup htpasswd credentials and files
+    vars:
+      CREDS_FILE: '{{ .CREDS_FILE | default "/tmp/dir-htpasswd-creds.env" }}'
+      HTPASSWD_FILE: '{{ .HTPASSWD_FILE | default "/tmp/dir-htpasswd" }}'
+    cmds:
+      - rm -f {{ .CREDS_FILE }}
+      - rm -f {{ .HTPASSWD_FILE }}
 
   deploy:kubernetes:local:
     aliases: [deploy:local]
@@ -335,19 +583,47 @@ tasks:
       KIND_CLUSTER_NAME: '{{ .KIND_CLUSTER_NAME | default "agntcy-cluster" }}'
       KIND_CREATE_OPTS: '{{ .KIND_CREATE_OPTS | default "" }}'
       # Helm args
-      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "default" }}'
-      HELM_CHART_PATH: '{{ .ROOT_DIR }}/install/charts/dir'
-      HELM_VALUES_PATH: '{{ .ROOT_DIR }}/install/charts/dir/values-test.yaml'
+      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "dir-server" }}'
+      HELM_CHART_PATH: "{{ .ROOT_DIR }}/install/charts/dir"
+      HELM_VALUES_PATH: "{{ .ROOT_DIR }}/install/charts/dir/values.yaml"
+      # Coverage config
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      DEPLOY_IMAGE_TAG: '{{ if eq .E2E_COVERAGE_ENABLED "true" }}{{ .COVERAGE_IMAGE_TAG }}{{ else }}{{ .IMAGE_TAG }}{{ end }}'
     cmds:
       # TODO: make logic idempotent so that running functional tests does not change previous contexts
 
+      # Generate credentials and htpasswd file (using defaults)
+      - task: deploy:kubernetes:gen-htpasswd-creds
+
+      # Cleanup credentials on exit (using defaults)
+      - defer:
+          task: deploy:kubernetes:cleanup-htpasswd-creds
+
       # Deploy chart
       - |
+        # Load credentials
+        source /tmp/dir-htpasswd-creds.env
+
         {{ .HELM_BIN }} dependency build {{ .HELM_CHART_PATH }}
+
         {{ .HELM_BIN }} upgrade dir \
           {{ .HELM_CHART_PATH }} \
           -f {{ .HELM_VALUES_PATH }} \
-          --set apiserver.image.tag="{{ .IMAGE_TAG }}" \
+          --set apiserver.image.tag="{{ .DEPLOY_IMAGE_TAG }}" \
+          {{ if .DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL }}--set apiserver.config.publication.scheduler_interval="{{ .DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL }}"{{ end }} \
+          --set apiserver.config.routing.refresh_interval="1s" \
+          --set apiserver.secrets.ociAuth.username="${HTPASSWD_USERNAME}" \
+          --set apiserver.secrets.ociAuth.password="${HTPASSWD_PASSWORD}" \
+          --set apiserver.zot.authHeader="${HTPASSWD_AUTH_HEADER}" \
+          --set-file apiserver.zot.secretFiles.htpasswd="/tmp/dir-htpasswd" \
+          --set apiserver.secrets.syncAuth.username="${HTPASSWD_SYNC_USERNAME}" \
+          --set apiserver.secrets.syncAuth.password="${HTPASSWD_SYNC_PASSWORD}" \
+          {{ if .DIRECTORY_SERVER_RATELIMIT_ENABLED }}--set apiserver.config.ratelimit.enabled="{{ .DIRECTORY_SERVER_RATELIMIT_ENABLED }}"{{ end }} \
+          {{ if .DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS }}--set apiserver.config.ratelimit.global_rps="{{ .DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS }}"{{ end }} \
+          {{ if .DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST }}--set apiserver.config.ratelimit.global_burst="{{ .DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST }}"{{ end }} \
+          {{ if .DIRECTORY_SERVER_RATELIMIT_PER_CLIENT_RPS }}--set apiserver.config.ratelimit.per_client_rps="{{ .DIRECTORY_SERVER_RATELIMIT_PER_CLIENT_RPS }}"{{ end }} \
+          {{ if .DIRECTORY_SERVER_RATELIMIT_PER_CLIENT_BURST }}--set apiserver.config.ratelimit.per_client_burst="{{ .DIRECTORY_SERVER_RATELIMIT_PER_CLIENT_BURST }}"{{ end }} \
+          {{ if eq .E2E_COVERAGE_ENABLED "true" }}--set-json 'apiserver.extraEnv=[{"name":"GOCOVERDIR","value":"/tmp/coverage"}]' --set apiserver.coverageVolume=true{{ end }} \
           --namespace {{ .HELM_NAMESPACE }} \
           --create-namespace \
           --install \
@@ -355,12 +631,118 @@ tasks:
           --wait-for-jobs \
           --timeout "15m"
 
+  deploy:kubernetes:context:
+    desc: Switch context to given Kubernetes cluster
+    vars:
+      KIND_CLUSTER_NAME: '{{ .KIND_CLUSTER_NAME | default "agntcy-cluster" }}'
+    cmds:
+      - "{{ .KIND_BIN }} export kubeconfig --name {{ .KIND_CLUSTER_NAME }}"
+
+  deploy:kubernetes:dir:
+    desc: Deploy DIR helm chart
+    vars:
+      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "dir-server" }}'
+      HELM_CHART_PATH: "{{ .ROOT_DIR }}/install/charts/dir"
+      HELM_VALUES_PATH: "{{ .ROOT_DIR }}/install/charts/dir/values.yaml"
+      HELM_EXTRA_ARGS: '{{ .HELM_EXTRA_ARGS | default "" }}'
+    cmds:
+      # Generate credentials and htpasswd file (using defaults)
+      - task: deploy:kubernetes:gen-htpasswd-creds
+
+      # Cleanup credentials on exit (using defaults)
+      - defer:
+          task: deploy:kubernetes:cleanup-htpasswd-creds
+
+      # Deploy chart
+      - |
+        # Load credentials
+        source /tmp/dir-htpasswd-creds.env
+
+        {{ .HELM_BIN }} dependency build {{ .HELM_CHART_PATH }}
+
+        {{ .HELM_BIN }} upgrade --install dir \
+          {{ .HELM_CHART_PATH }} \
+          -f {{ .HELM_VALUES_PATH }} \
+          --set apiserver.image.tag="{{ .IMAGE_TAG }}" \
+          {{ if .DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL }}--set apiserver.config.publication.scheduler_interval="{{ .DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL }}"{{ end }} \
+          --set apiserver.secrets.ociAuth.username="${HTPASSWD_USERNAME}" \
+          --set apiserver.secrets.ociAuth.password="${HTPASSWD_PASSWORD}" \
+          --set apiserver.zot.authHeader="${HTPASSWD_AUTH_HEADER}" \
+          --set-file apiserver.zot.secretFiles.htpasswd="/tmp/dir-htpasswd" \
+          --set apiserver.secrets.syncAuth.username="${HTPASSWD_SYNC_USERNAME}" \
+          --set apiserver.secrets.syncAuth.password="${HTPASSWD_SYNC_PASSWORD}" \
+          --set apiserver.log_level="DEBUG" \
+          {{ .HELM_EXTRA_ARGS }} \
+          --namespace {{ .HELM_NAMESPACE }} \
+          --create-namespace \
+          --install \
+          --wait \
+          --wait-for-jobs \
+          --timeout "15m"
+
+  deploy:kubernetes:dirctl:
+    desc: Deploy DIRCTL helm chart
+    vars:
+      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "dir-client" }}'
+      HELM_CHART_PATH: "{{ .ROOT_DIR }}/install/charts/dirctl"
+      HELM_VALUES_PATH: "{{ .ROOT_DIR }}/install/charts/dirctl/values.yaml"
+      HELM_EXTRA_ARGS: '{{ .HELM_EXTRA_ARGS | default "" }}'
+    cmds:
+      - |
+        {{ .HELM_BIN }} upgrade --install dirctl \
+          {{ .HELM_CHART_PATH }} \
+          -f {{ .HELM_VALUES_PATH }} \
+          --set image.tag="{{ .IMAGE_TAG }}" \
+          {{ .HELM_EXTRA_ARGS }} \
+          --namespace {{ .HELM_NAMESPACE }} \
+          --create-namespace \
+          --install \
+          --wait \
+          --wait-for-jobs \
+          --timeout "15m"
+
+  deploy:kubernetes:spire:
+    desc: Deploy SPIRE helm chart
+    vars:
+      TRUST_DOMAIN: '{{ .TRUST_DOMAIN | default "example.org" }}'
+      SERVICE_TYPE: '{{ .SERVICE_TYPE | default "LoadBalancer" }}'
+      BUNDLE_PATH: '{{ .BUNDLE_PATH | default "/tmp/spire-bundle.spiffe" }}'
+    cmds:
+      - |
+        {{ .HELM_BIN }} upgrade --install spire-crds spire-crds \
+          --repo https://spiffe.github.io/helm-charts-hardened/ \
+          --namespace spire-crds \
+          --create-namespace \
+          --install \
+          --wait \
+          --wait-for-jobs \
+          --timeout "15m"
+
+      - |
+        {{ .HELM_BIN }} upgrade --install spire spire \
+          --repo https://spiffe.github.io/helm-charts-hardened/ \
+          --set global.spire.trustDomain="{{ .TRUST_DOMAIN }}" \
+          --set spire-server.image.tag="{{ .SPIRE_VERSION }}" \
+          --set spire-agent.image.tag="{{ .SPIRE_VERSION }}" \
+          --set spire-server.service.type="{{ .SERVICE_TYPE }}" \
+          --set spire-server.federation.enabled="true" \
+          --set spire-server.controllerManager.watchClassless="true" \
+          --namespace spire \
+          --create-namespace \
+          --install \
+          --wait \
+          --wait-for-jobs \
+          --timeout "15m"
+
+      - |
+        {{ .KUBECTL_BIN }} get configmap -n spire spire-bundle -o json | jq '.data."bundle.spiffe"' -r > {{ .BUNDLE_PATH }}
+
   deploy:kubernetes:local:port-forward:
     aliases: [deploy:local:port-forward]
     desc: Set up port-forwarding for the local deployment
     vars:
       # Helm args
-      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "default" }}'
+      HELM_NAMESPACE: '{{ .HELM_NAMESPACE | default "dir-server" }}'
     cmds:
       # Port-forward dependency services
       - |
@@ -377,7 +759,7 @@ tasks:
       - kill -9 $(ps aux | grep port-forward | grep dir-apiserver | awk '{print $2}') || true
 
   deploy:kubernetes:local:cleanup:
-    aliases: [deploy:local:cleanup]
+    aliases: [deploy:local:cleanup, deploy:kubernetes:cleanup]
     desc: Cleanup Kubernetes environment for local deployment
     deps:
       - deps:kind
@@ -385,22 +767,27 @@ tasks:
       # Kind args
       KIND_CLUSTER_NAME: '{{ .KIND_CLUSTER_NAME | default "agntcy-cluster" }}'
     cmds:
-      - '{{ .KIND_BIN }} delete cluster --name {{ .KIND_CLUSTER_NAME }}'
+      - "{{ .KIND_BIN }} delete cluster --name {{ .KIND_CLUSTER_NAME }}"
 
   deploy:kubernetes:network:bootstrap:
     internal: true
     desc: Deploy a bootstrap Directory server in Kubernetes
     deps:
-      - deploy:kubernetes:setup-cluster
+      - task: deploy:kubernetes:setup-cluster
+        vars:
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - deps:dirctl-bin
     vars:
       # Helm args
-      HELM_CHART_PATH: '{{ .ROOT_DIR }}/install/charts/dir'
-      HELM_VALUES_PATH: '{{ .ROOT_DIR }}/install/charts/dir/values.yaml'
+      HELM_CHART_PATH: "{{ .ROOT_DIR }}/install/charts/dir"
+      HELM_VALUES_PATH: "{{ .ROOT_DIR }}/install/charts/dir/values.yaml"
+      # Coverage config
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      DEPLOY_IMAGE_TAG: '{{ if eq .E2E_COVERAGE_ENABLED "true" }}{{ .COVERAGE_IMAGE_TAG }}{{ else }}{{ .IMAGE_TAG }}{{ end }}'
     cmds:
       # Generate private key if it doesn't exist
       - |
-        test -f /tmp/node.privkey || openssl genpkey -algorithm ED25519 -out /tmp/node.privkey
+        test -f /tmp/node.privkey || {{ .BIN_DIR }}/dirctl network init --output /tmp/node.privkey
 
       # Generate the bootstrap peer ID and export it to the environment file
       - |
@@ -408,17 +795,45 @@ tasks:
         echo "PEER ID: ${bootstrap_peerid}"
         echo BOOTSTRAP_PEER_ID="${bootstrap_peerid}" > .env
 
+      # Generate credentials and htpasswd file
+      - task: deploy:kubernetes:gen-htpasswd-creds
+        vars:
+          CREDS_FILE: "/tmp/dir-htpasswd-creds-bootstrap.env"
+          HTPASSWD_FILE: "/tmp/zot-htpasswd-bootstrap"
+
+      # Cleanup credentials on exit
+      - defer:
+          task: deploy:kubernetes:cleanup-htpasswd-creds
+          vars:
+            CREDS_FILE: "/tmp/dir-htpasswd-creds-bootstrap.env"
+            HTPASSWD_FILE: "/tmp/zot-htpasswd-bootstrap"
+
       # Deploy the bootstrap server using Helm
       - |
+        # Load credentials
+        source /tmp/dir-htpasswd-creds-bootstrap.env
+
         {{ .HELM_BIN }} dependency build {{ .HELM_CHART_PATH }}
+
         {{ .HELM_BIN }} upgrade agntcy-dir \
           {{ .HELM_CHART_PATH }} \
           -f {{ .HELM_VALUES_PATH }} \
-          --set apiserver.image.tag="{{ .IMAGE_TAG }}" \
-          --set apiserver.privKey="$(cat /tmp/node.privkey)" \
+          --set apiserver.image.tag="{{ .DEPLOY_IMAGE_TAG }}" \
+            {{ if .PUBLICATION_SCHEDULER_INTERVAL }}--set apiserver.config.publication.scheduler_interval="{{ .PUBLICATION_SCHEDULER_INTERVAL }}"{{ end }} \
+          --set apiserver.config.routing.refresh_interval="1s" \
+          --set apiserver.secrets.privKey="$(cat /tmp/node.privkey)" \
           --set apiserver.config.routing.key_path="/etc/agntcy/dir/node.privkey" \
           --set apiserver.config.routing.listen_address="/ip4/0.0.0.0/tcp/8999" \
-          --set apiserver.config.oci.registry_address="agntcy-dir-zot.bootstrap.svc.cluster.local:5000" \
+          --set apiserver.config.routing.directory_api_address="agntcy-dir-apiserver.bootstrap.svc.cluster.local:8888" \
+          --set apiserver.config.store.oci.registry_address="agntcy-dir-zot.bootstrap.svc.cluster.local:5000" \
+          --set apiserver.zot.extraVolumes[0].persistentVolumeClaim.claimName="agntcy-dir-zot-config" \
+          --set apiserver.secrets.ociAuth.username="${HTPASSWD_USERNAME}" \
+          --set apiserver.secrets.ociAuth.password="${HTPASSWD_PASSWORD}" \
+          --set apiserver.zot.authHeader="${HTPASSWD_AUTH_HEADER}" \
+          --set-file apiserver.zot.secretFiles.htpasswd="/tmp/zot-htpasswd-bootstrap" \
+          --set apiserver.secrets.syncAuth.username="${HTPASSWD_SYNC_USERNAME}" \
+          --set apiserver.secrets.syncAuth.password="${HTPASSWD_SYNC_PASSWORD}" \
+          {{ if eq .E2E_COVERAGE_ENABLED "true" }}--set-json 'apiserver.extraEnv=[{"name":"GOCOVERDIR","value":"/tmp/coverage"}]' --set apiserver.coverageVolume=true{{ end }} \
           --namespace "bootstrap" \
           --create-namespace \
           --install \
@@ -429,24 +844,52 @@ tasks:
   deploy:kubernetes:network:
     aliases: [deploy:network]
     desc: Deploy a network of Directory servers in Kubernetes (1 bootstrap + 3 peers)
-    deps:
-      - deploy:kubernetes:network:bootstrap
     vars:
-      HELM_CHART_PATH: '{{ .ROOT_DIR }}/install/charts/dir'
-      HELM_VALUES_PATH: '{{ .ROOT_DIR }}/install/charts/dir/values.yaml'
+      HELM_CHART_PATH: "{{ .ROOT_DIR }}/install/charts/dir"
+      HELM_VALUES_PATH: "{{ .ROOT_DIR }}/install/charts/dir/values.yaml"
+      # Coverage config
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      DEPLOY_IMAGE_TAG: '{{ if eq .E2E_COVERAGE_ENABLED "true" }}{{ .COVERAGE_IMAGE_TAG }}{{ else }}{{ .IMAGE_TAG }}{{ end }}'
     cmds:
+      # Deploy bootstrap with explicit var passing (not as dependency)
+      - task: deploy:kubernetes:network:bootstrap
+        vars:
+          PUBLICATION_SCHEDULER_INTERVAL: "{{ .PUBLICATION_SCHEDULER_INTERVAL }}"
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+
       # Deploy the peer servers using Helm
       - for:
           matrix:
-            PEER: ['peer1', 'peer2', 'peer3']
+            PEER: ["peer1", "peer2", "peer3"]
         cmd: |
           export $(cat .env)
+
+          # Generate fresh credentials for this peer using helper task
+          task deploy:kubernetes:gen-htpasswd-creds \
+            CREDS_FILE=/tmp/dir-htpasswd-creds-{{ .ITEM.PEER }}.env \
+            HTPASSWD_FILE=/tmp/zot-htpasswd-{{ .ITEM.PEER }}
+
+          # Load credentials
+          source /tmp/dir-htpasswd-creds-{{ .ITEM.PEER }}.env
+
+          {{ .HELM_BIN }} dependency build {{ .HELM_CHART_PATH }}
           {{ .HELM_BIN }} upgrade agntcy-dir \
             {{ .HELM_CHART_PATH }} \
             -f {{ .HELM_VALUES_PATH }} \
-            --set apiserver.image.tag="{{ .IMAGE_TAG }}" \
-            --set apiserver.config.oci.registry_address="agntcy-dir-zot.{{ .ITEM.PEER }}.svc.cluster.local:5000" \
+            --set apiserver.image.tag="{{ .DEPLOY_IMAGE_TAG }}" \
+            {{ if .PUBLICATION_SCHEDULER_INTERVAL }}--set apiserver.config.publication.scheduler_interval="{{ .PUBLICATION_SCHEDULER_INTERVAL }}"{{ end }} \
+            --set apiserver.config.routing.refresh_interval="1s" \
+            --set apiserver.config.store.oci.registry_address="agntcy-dir-zot.{{ .ITEM.PEER }}.svc.cluster.local:5000" \
             --set apiserver.config.routing.bootstrap_peers[0]="/dns4/agntcy-dir-apiserver-routing.bootstrap.svc.cluster.local/tcp/8999/p2p/${BOOTSTRAP_PEER_ID}" \
+            --set apiserver.config.routing.directory_api_address="agntcy-dir-apiserver.{{ .ITEM.PEER }}.svc.cluster.local:8888" \
+            --set apiserver.zot.extraVolumes[0].persistentVolumeClaim.claimName="agntcy-dir-zot-config" \
+            --set apiserver.secrets.ociAuth.username="${HTPASSWD_USERNAME}" \
+            --set apiserver.secrets.ociAuth.password="${HTPASSWD_PASSWORD}" \
+            --set apiserver.zot.authHeader="${HTPASSWD_AUTH_HEADER}" \
+            --set-file apiserver.zot.secretFiles.htpasswd="/tmp/zot-htpasswd-{{ .ITEM.PEER }}" \
+            --set apiserver.secrets.syncAuth.username="${HTPASSWD_SYNC_USERNAME}" \
+            --set apiserver.secrets.syncAuth.password="${HTPASSWD_SYNC_PASSWORD}" \
+            {{ if eq .E2E_COVERAGE_ENABLED "true" }}--set-json 'apiserver.extraEnv=[{"name":"GOCOVERDIR","value":"/tmp/coverage"}]' --set apiserver.coverageVolume=true{{ end }} \
             --namespace "{{ .ITEM.PEER }}" \
             --create-namespace \
             --install \
@@ -454,14 +897,18 @@ tasks:
             --wait-for-jobs \
             --timeout "15m"
 
+          # Cleanup temp files
+          rm -f /tmp/zot-htpasswd-{{ .ITEM.PEER }}
+          rm -f /tmp/dir-htpasswd-creds-{{ .ITEM.PEER }}.env
+
   deploy:kubernetes:network:port-forward:
     aliases: [deploy:network:port-forward]
     desc: Set up port-forwarding for the peers
     cmds:
       # Port-forward dependency services
-      - '{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer1 8890:8888 &'
-      - '{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer2 8891:8888 &'
-      - '{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer3 8892:8888 &'
+      - "{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer1 8890:8888 &"
+      - "{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer2 8891:8888 &"
+      - "{{ .KUBECTL_BIN }} port-forward svc/agntcy-dir-apiserver -n peer3 8892:8888 &"
 
       # Delay to ensure services are online
       - sleep 10
@@ -483,11 +930,11 @@ tasks:
       # Delete helm releases
       - for:
           matrix:
-            PEER: ['bootstrap', 'peer1', 'peer2', 'peer3']
+            PEER: ["bootstrap", "peer1", "peer2", "peer3"]
         cmd: |
           {{ .HELM_BIN }} delete --namespace {{ .ITEM.PEER }} agntcy-dir
 
-      - '{{ .KIND_BIN }} delete cluster --name {{ .KIND_CLUSTER_NAME }}'
+      - "{{ .KIND_BIN }} delete cluster --name {{ .KIND_CLUSTER_NAME }}"
 
   ##
   ## Test
@@ -495,29 +942,86 @@ tasks:
   test:unit:
     desc: Run unit tests on codebase
     aliases: [test]
-    deps: # run in parallel
-      - cli:test
-      - api:test
-      - client:test
-      - server:test
+    vars:
+      EXTRA_ARGS: '{{ .EXTRA_ARGS | default "" }}'
     cmds:
-      - echo "Success"
+      - for: { var: GO_MOD_DIR_UNIT_TEST }
+        cmd: |
+          echo "Running tests in {{.ITEM}}"
+          go -C {{.ITEM}} test ./... {{.EXTRA_ARGS}}
 
-  test:unit:cover:
-    desc: Run all unit tests with coverage and generate reports
-    deps:
-      - task: cli:test
-        vars:
-          EXTRA_ARGS: '-coverprofile {{.ROOT_DIR}}/coverage-dir-cli.out -json > {{.ROOT_DIR}}/test-report-dir-cli.json'
-      - task: api:test
-        vars:
-          EXTRA_ARGS: '-coverprofile {{.ROOT_DIR}}/coverage-dir-api.out -json > {{.ROOT_DIR}}/test-report-dir-api.json'
-      - task: client:test
-        vars:
-          EXTRA_ARGS: '-coverprofile {{.ROOT_DIR}}/coverage-dir-client.out -json > {{.ROOT_DIR}}/test-report-dir-client.json'
-      - task: server:test
-        vars:
-          EXTRA_ARGS: '-coverprofile {{.ROOT_DIR}}/coverage-dir-server.out -json > {{.ROOT_DIR}}/test-report-dir-server.json'
+  test:unit:coverage:
+    desc: Run all unit tests with coverage and generate summaries + HTML reports
+    vars:
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/unit") }}'
+    cmds:
+      - echo "Removing existing coverage directory and reports"
+      - rm -rf {{.COVERAGE_DIR}}/*
+      - echo "Creating new coverage directory"
+      - mkdir -p {{.COVERAGE_DIR}}
+      - |
+        set -euo pipefail
+        # Build list of modules from GO_MOD_DIR_UNIT_TEST
+        modules=""
+        {{range $dir := .GO_MOD_DIR_UNIT_TEST | splitList "\n"}}
+        {{if $dir}}modules="$modules $(basename {{$dir}})"{{end}}
+        {{end}}
+        for m in $modules; do
+          if [ -d "$m" ]; then
+            echo "[coverage] Testing module: $m"
+            (
+              cd "$m"
+              # Run tests with coverprofile (text format)
+              if go test -covermode=atomic -coverprofile="{{.COVERAGE_DIR}}/$m.out.tmp" ./... -json 2>&1 | tee "{{.COVERAGE_DIR}}/test-report-$m.json" >/dev/null; then
+                echo "[coverage] Completed: $m"
+              else
+                status=$?
+                echo "[coverage][warn] Tests failed in $m (exit $status); continuing"
+              fi
+            )
+            # Filter out generated files (matching codecov.yml ignores)
+            if [ -f "{{.COVERAGE_DIR}}/$m.out.tmp" ]; then
+              grep -v "\.pb\.go" "{{.COVERAGE_DIR}}/$m.out.tmp" | grep -v "mock_.*\.go" > "{{.COVERAGE_DIR}}/$m.out" || echo "mode: atomic" > "{{.COVERAGE_DIR}}/$m.out"
+              rm "{{.COVERAGE_DIR}}/$m.out.tmp"
+            else
+              echo "[coverage] No coverage generated for $m"
+              echo "mode: atomic" > "{{.COVERAGE_DIR}}/$m.out"
+            fi
+          fi
+        done
+      - |
+        set -euo pipefail
+        echo "[coverage] Generating per-module summaries"
+        : > {{.COVERAGE_DIR}}/summary.txt
+        # Build list of modules from GO_MOD_DIR_UNIT_TEST
+        modules=""
+        {{range $dir := .GO_MOD_DIR_UNIT_TEST | splitList "\n"}}
+        {{if $dir}}modules="$modules $(basename {{$dir}})"{{end}}
+        {{end}}
+        for m in $modules; do
+          if [ -f "{{.COVERAGE_DIR}}/$m.out" ]; then
+            if (cd "$m" && go tool cover -func={{.COVERAGE_DIR}}/$m.out > {{.COVERAGE_DIR}}/$m.func.txt 2>/dev/null); then
+              tail -n1 {{.COVERAGE_DIR}}/$m.func.txt | sed "s/^total:/[$m] total:/" >> {{.COVERAGE_DIR}}/summary.txt || true
+            else
+              echo "[$m] total: (error generating summary)" >> {{.COVERAGE_DIR}}/summary.txt
+            fi
+          fi
+        done
+        echo "[coverage] Summary:"; cat {{.COVERAGE_DIR}}/summary.txt
+      - |
+        set -euo pipefail
+        echo "[coverage] Generating HTML reports"
+        # Build list of modules from GO_MOD_DIR_UNIT_TEST
+        modules=""
+        {{range $dir := .GO_MOD_DIR_UNIT_TEST | splitList "\n"}}
+        {{if $dir}}modules="$modules $(basename {{$dir}})"{{end}}
+        {{end}}
+        for m in $modules; do
+          if [ -f "{{.COVERAGE_DIR}}/$m.out" ] && [ -d "$m" ]; then
+            (cd "$m" && go tool cover -html={{.COVERAGE_DIR}}/$m.out -o {{.COVERAGE_DIR}}/$m.html || true)
+          fi
+        done
+        echo "[coverage] Generated HTML files:"; ls -1 {{.COVERAGE_DIR}}/*.html 2>/dev/null | sed 's|{{.COVERAGE_DIR}}/|  - |' || echo "  (none)"
 
   bench:
     desc: Run bench tests on codebase
@@ -532,33 +1036,518 @@ tasks:
       - task: test:e2e:local
       - task: test:e2e:network
 
-  test:e2e:local:
-    desc: Run end-to-end tests for local deployment
-    aliases: [e2e:local]
+  test:e2e:local:cli:
+    desc: Run only local CLI tests (with dedicated infrastructure)
+    aliases: [e2e:local:cli]
+    vars:
+      PUBLICATION_SCHEDULER_INTERVAL: '{{ .PUBLICATION_SCHEDULER_INTERVAL | default "1s" }}'
+      RATELIMIT_ENABLED: '{{ .RATELIMIT_ENABLED | default "false" }}'
+      RATELIMIT_GLOBAL_RPS: '{{ .RATELIMIT_GLOBAL_RPS | default "100" }}'
+      RATELIMIT_GLOBAL_BURST: '{{ .RATELIMIT_GLOBAL_BURST | default "200" }}'
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
+    env:
+      DIRECTORY_E2E_DEPLOYMENT_MODE: "local"
     cmds:
       - defer: { task: deploy:kubernetes:local:cleanup }
       - defer: { task: deploy:kubernetes:local:port-forward:cleanup }
-      # Bootstrap
-      # NOTE: Run as a dedicated task instead of dependency, otherwise the port forwarding won't work
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "dir-server"
+            COVERAGE_DIR: "{{ .COVERAGE_DIR }}"
       - task: deploy:kubernetes:local
+        vars:
+          DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: "{{ .PUBLICATION_SCHEDULER_INTERVAL }}"
+          DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - task: deploy:kubernetes:local:port-forward
-      # Run tests
-      - 'go -C ./e2e test -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v .'
+      - |
+        # Run E2E tests with coverage if enabled
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/local -covermode=atomic -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/local-cli.out.tmp . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+          # Filter out generated files (matching codecov.yml ignores)
+          if [ -f {{.COVERAGE_DIR}}/local-cli.out.tmp ]; then
+            grep -v "\.pb\.go" {{.COVERAGE_DIR}}/local-cli.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/local-cli.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/local-cli.out
+            rm {{.COVERAGE_DIR}}/local-cli.out.tmp
+          fi
+        else
+          go test -C ./e2e/local . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+        fi
+
+  test:e2e:client:
+    desc: Run only client library tests (with dedicated infrastructure)
+    aliases: [e2e:client]
+    vars:
+      PUBLICATION_SCHEDULER_INTERVAL: '{{ .PUBLICATION_SCHEDULER_INTERVAL | default "1s" }}'
+      RATELIMIT_ENABLED: '{{ .RATELIMIT_ENABLED | default "true" }}'
+      RATELIMIT_GLOBAL_RPS: '{{ .RATELIMIT_GLOBAL_RPS | default "100" }}'
+      RATELIMIT_GLOBAL_BURST: '{{ .RATELIMIT_GLOBAL_BURST | default "200" }}'
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
+    env:
+      DIRECTORY_E2E_DEPLOYMENT_MODE: "local"
+    cmds:
+      - defer: { task: deploy:kubernetes:local:cleanup }
+      - defer: { task: deploy:kubernetes:local:port-forward:cleanup }
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "dir-server"
+            COVERAGE_DIR: "{{ .COVERAGE_DIR }}"
+      - task: deploy:kubernetes:local
+        vars:
+          DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: "{{ .PUBLICATION_SCHEDULER_INTERVAL }}"
+          DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+      - task: deploy:kubernetes:local:port-forward
+      - |
+        # Run E2E tests with coverage if enabled
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/client -covermode=atomic -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/local-client.out.tmp . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+          # Filter out generated files (matching codecov.yml ignores)
+          if [ -f {{.COVERAGE_DIR}}/local-client.out.tmp ]; then
+            grep -v "\.pb\.go" {{.COVERAGE_DIR}}/local-client.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/local-client.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/local-client.out
+            rm {{.COVERAGE_DIR}}/local-client.out.tmp
+          fi
+        else
+          go test -C ./e2e/client . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+        fi
+
+  test:e2e:local:
+    desc: Run end-to-end tests for local deployment (Client + CLI + Rate limiting tests)
+    aliases: [e2e:local]
+    vars:
+      PUBLICATION_SCHEDULER_INTERVAL: '{{ .PUBLICATION_SCHEDULER_INTERVAL | default "1s" }}'
+      RATELIMIT_ENABLED: '{{ .RATELIMIT_ENABLED | default "true" }}'
+      RATELIMIT_GLOBAL_RPS: '{{ .RATELIMIT_GLOBAL_RPS | default "100" }}'
+      RATELIMIT_GLOBAL_BURST: '{{ .RATELIMIT_GLOBAL_BURST | default "200" }}'
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
+    env:
+      DIRECTORY_E2E_DEPLOYMENT_MODE: "local"
+    cmds:
+      - defer: { task: deploy:kubernetes:local:cleanup }
+      - defer: { task: deploy:kubernetes:local:port-forward:cleanup }
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "dir-server"
+      # Bootstrap infrastructure once for all test suites
+      - task: deploy:kubernetes:local
+        vars:
+          DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: "{{ .PUBLICATION_SCHEDULER_INTERVAL }}"
+          DIRECTORY_SERVER_RATELIMIT_ENABLED: "{{ .RATELIMIT_ENABLED }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_RPS: "{{ .RATELIMIT_GLOBAL_RPS }}"
+          DIRECTORY_SERVER_RATELIMIT_GLOBAL_BURST: "{{ .RATELIMIT_GLOBAL_BURST }}"
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+      - task: deploy:kubernetes:local:port-forward
+      # Run client library tests first (faster feedback)
+      - |
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/client -covermode=atomic -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/local-client.out.tmp . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v -ginkgo.label-filter="!ratelimit"
+          # Filter out generated files (matching codecov.yml ignores)
+          if [ -f {{.COVERAGE_DIR}}/local-client.out.tmp ]; then
+            grep -v "\.pb\.go" {{.COVERAGE_DIR}}/local-client.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/local-client.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/local-client.out
+            rm {{.COVERAGE_DIR}}/local-client.out.tmp
+          fi
+        else
+          go test -C ./e2e/client . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v -ginkgo.label-filter="!ratelimit"
+        fi
+      # Run local CLI tests second (same infrastructure)
+      - |
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/local -covermode=atomic -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/local-cli.out.tmp . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+          # Filter out generated files (matching codecov.yml ignores)
+          if [ -f {{.COVERAGE_DIR}}/local-cli.out.tmp ]; then
+            grep -v "\.pb\.go" {{.COVERAGE_DIR}}/local-cli.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/local-cli.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/local-cli.out
+            rm {{.COVERAGE_DIR}}/local-cli.out.tmp
+          fi
+        else
+          go test -C ./e2e/local . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+        fi
+      # Wait 3 seconds for rate limit reset
+      - sleep 3
+      # Run rate limiting tests LAST
+      - |
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/client -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/local-client.out . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v -ginkgo.label-filter="ratelimit"
+        else
+          go test -C ./e2e/client . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v -ginkgo.label-filter="ratelimit"
+        fi
 
   test:e2e:network:
-    desc: Run end-to-end tests for network deployment
+    desc: Run end-to-end tests for network deployment (Multi-peer CLI tests)
     aliases: [e2e:network]
+    vars:
+      PUBLICATION_SCHEDULER_INTERVAL: '{{ .PUBLICATION_SCHEDULER_INTERVAL | default "1s" }}'
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
     env:
-      DIRECTORY_E2E_DEPLOYMENT_MODE: 'network'
+      DIRECTORY_E2E_DEPLOYMENT_MODE: "network"
     cmds:
       - defer: { task: deploy:kubernetes:network:cleanup }
       - defer: { task: deploy:kubernetes:network:port-forward:cleanup }
+      # Extract coverage from all network namespaces
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "bootstrap"
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "peer1"
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "peer2"
+      - defer:
+          task: test:e2e:coverage:extract-pods
+          vars:
+            E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
+            NAMESPACE: "peer3"
       # Bootstrap
       # NOTE: Run as a dedicated task instead of dependency, otherwise the port forwarding won't work
       - task: deploy:kubernetes:network
+        vars:
+          PUBLICATION_SCHEDULER_INTERVAL: "{{ .PUBLICATION_SCHEDULER_INTERVAL }}"
+          E2E_COVERAGE_ENABLED: "{{ .E2E_COVERAGE_ENABLED }}"
       - task: deploy:kubernetes:network:port-forward
-      # Run tests
-      - 'go -C ./e2e test -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v .'
+      # Run network tests with proper isolation and cleanup
+      - |
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          mkdir -p {{.COVERAGE_DIR}}
+          go test -C ./e2e/network -covermode=atomic -coverpkg={{ .COVERAGE_PKGS }} -coverprofile={{.COVERAGE_DIR}}/network.out.tmp . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+          # Filter out generated files (matching codecov.yml ignores)
+          if [ -f {{.COVERAGE_DIR}}/network.out.tmp ]; then
+            grep -v "\.pb\.go" {{.COVERAGE_DIR}}/network.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/network.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/network.out
+            rm {{.COVERAGE_DIR}}/network.out.tmp
+          fi
+        else
+          go test -C ./e2e/network . -v -failfast -test.v -test.paniconexit0 -ginkgo.timeout 2h -timeout 2h -ginkgo.v
+        fi
+
+  test:e2e:spire:
+    desc: Run end-to-end tests for SPIRE deployment
+    cmds:
+      # Run SPIRE deployment
+      - task: test:spire
+      # Run SDK tests
+      - task: sdk:deps:javascript
+      - task: sdk:test-env:spiffe:load-test-image
+      - task: sdk:test:all:spiffe
+
+  # TODO: move spire out from here
+  # TODO: change to Ingress services instead of LoadBalancer
+  test:spire:
+    desc: Test SPIRE federation setup between DIR and DIRCTL clusters
+    deps:
+      - task: helm:gen
+    vars:
+      AUTH_MODE: '{{ .AUTH_MODE | default "x509" }}' # or "jwt"
+      DIR_TRUST_DOMAIN: '{{ .DIR_TRUST_DOMAIN | default "dir.example" }}'
+      DIRCTL_TRUST_DOMAIN: '{{ .DIRCTL_TRUST_DOMAIN | default "dirctl.example" }}'
+      DIR_DNS_NAME_TEMPLATE: '{{ .DIR_DNS_NAME_TEMPLATE | default "127.0.0.1.nip.io" }}'
+    cmds:
+      # Setup DIR cluster
+      - task: deploy:kubernetes:setup-cluster
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+
+      # Start cloud provider for LoadBalancer support
+      - |
+        echo "Starting Kind cloud provider for LoadBalancer support..."
+        go run sigs.k8s.io/cloud-provider-kind@latest > /dev/null 2>&1 &
+        echo "Cloud provider started in background"
+
+      # Deploy SPIRE on DIR cluster
+      - task: deploy:kubernetes:spire
+        vars:
+          TRUST_DOMAIN: "{{ .DIR_TRUST_DOMAIN }}"
+          BUNDLE_PATH: /tmp/{{ .DIR_TRUST_DOMAIN }}.spiffe
+
+      # Setup DIRCTL cluster
+      - task: deploy:kubernetes:setup-cluster
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIRCTL_TRUST_DOMAIN }}"
+
+      # Start cloud provider for LoadBalancer support
+      - |
+        echo "Starting Kind cloud provider for LoadBalancer support..."
+        go run sigs.k8s.io/cloud-provider-kind@latest > /dev/null 2>&1 &
+        echo "Cloud provider started in background"
+
+      # Deploy SPIRE on DIRCTL cluster
+      - task: deploy:kubernetes:spire
+        vars:
+          TRUST_DOMAIN: "{{ .DIRCTL_TRUST_DOMAIN }}"
+          BUNDLE_PATH: /tmp/{{ .DIRCTL_TRUST_DOMAIN }}.spiffe
+
+      # Get DIR cluster service addresses
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+      - |
+        echo "Getting DIR cluster service addresses..."
+        DIR_BUNDLE_IP=$(kubectl get service -n spire spire-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
+        echo "DIR_BUNDLE_ADDRESS=${DIR_BUNDLE_IP}:8443" >> /tmp/spire-addresses.env
+
+      # Get DIRCTL cluster service addresses
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIRCTL_TRUST_DOMAIN }}"
+      - |
+        echo "Getting DIRCTL cluster service addresses..."
+        DIRCTL_BUNDLE_IP=$(kubectl get service -n spire spire-server -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
+        echo "DIRCTL_BUNDLE_ADDRESS=${DIRCTL_BUNDLE_IP}:8443" >> /tmp/spire-addresses.env
+
+      # Create DIR server federation config
+      - |
+        source /tmp/spire-addresses.env
+        echo "Creating DIR server federation config..."
+        cat > /tmp/server-federation.yaml << EOF
+        apiserver:
+          service:
+            type: LoadBalancer
+          config:
+            authn:
+              enabled: true
+              mode: "{{ .AUTH_MODE }}"
+              audiences:
+                - "spiffe://{{ .DIR_TRUST_DOMAIN }}/spire/server"
+            authz:
+              enabled: true
+              trust_domain: {{ .DIR_TRUST_DOMAIN }}
+          spire:
+            enabled: true
+            trustDomain: {{ .DIR_TRUST_DOMAIN }}
+            dnsNameTemplates:
+              - "{{ .DIR_DNS_NAME_TEMPLATE }}"
+            federation:
+              - trustDomain: {{ .DIRCTL_TRUST_DOMAIN }}
+                bundleEndpointURL: https://${DIRCTL_BUNDLE_ADDRESS}
+                bundleEndpointProfile:
+                  type: https_spiffe
+                  endpointSPIFFEID: spiffe://{{ .DIRCTL_TRUST_DOMAIN }}/spire/server
+                trustDomainBundle: |-
+                  $(cat /tmp/{{ .DIRCTL_TRUST_DOMAIN }}.spiffe)
+        EOF
+
+      # Deploy DIR server with federation
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+      - task: deploy:kubernetes:dir
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+          HELM_EXTRA_ARGS: "-f /tmp/server-federation.yaml"
+          DIRECTORY_SERVER_PUBLICATION_SCHEDULER_INTERVAL: 1s
+
+      # Get DIR API server address
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+      - |
+        echo "Getting DIR API server address..."
+        DIR_API_IP=$(kubectl get service -n dir-server dir-apiserver -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "127.0.0.1")
+        echo "DIR_SERVER_ADDRESS=${DIR_API_IP}:8888" >> /tmp/spire-addresses.env
+
+      # Create DIRCTL client federation config (for dirctl in dir.example)
+      - |
+        source /tmp/spire-addresses.env
+        echo "Creating DIRCTL client federation config for dir.example..."
+        cat > /tmp/client-federation-dir-example.yaml << EOF
+        env:
+          - name: DIRECTORY_CLIENT_SERVER_ADDRESS
+            value: ${DIR_SERVER_ADDRESS}
+          - name: DIRECTORY_CLIENT_AUTH_MODE
+            value: "{{ .AUTH_MODE }}"
+          - name: DIRECTORY_CLIENT_JWT_AUDIENCE
+            value: "spiffe://{{ .DIR_TRUST_DOMAIN }}/spire/server"
+        spire:
+          enabled: true
+          trustDomain: {{ .DIR_TRUST_DOMAIN }}
+        EOF
+
+      # Deploy DIRCTL client in dir.example trust domain (same cluster as dir)
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+      - task: deploy:kubernetes:dirctl
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+          HELM_NAMESPACE: "dir-client"
+          HELM_EXTRA_ARGS: "-f /tmp/client-federation-dir-example.yaml"
+
+      # Create DIRCTL client federation config (for dirctl.example cluster)
+      - |
+        source /tmp/spire-addresses.env
+        echo "Creating DIRCTL client federation config..."
+        cat > /tmp/client-federation.yaml << EOF
+        env:
+          - name: DIRECTORY_CLIENT_SERVER_ADDRESS
+            value: ${DIR_SERVER_ADDRESS}
+          - name: DIRECTORY_CLIENT_AUTH_MODE
+            value: "{{ .AUTH_MODE }}"
+          - name: DIRECTORY_CLIENT_JWT_AUDIENCE
+            value: "spiffe://{{ .DIR_TRUST_DOMAIN }}/spire/server"
+        spire:
+          enabled: true
+          trustDomain: {{ .DIRCTL_TRUST_DOMAIN }}
+          federation:
+            - trustDomain: {{ .DIR_TRUST_DOMAIN }}
+              bundleEndpointURL: https://${DIR_BUNDLE_ADDRESS}
+              bundleEndpointProfile:
+                type: https_spiffe
+                endpointSPIFFEID: spiffe://{{ .DIR_TRUST_DOMAIN }}/spire/server
+              trustDomainBundle: |-
+                $(cat /tmp/{{ .DIR_TRUST_DOMAIN }}.spiffe)
+        EOF
+
+      # Deploy DIRCTL client with federation (in dirctl.example cluster)
+      - task: deploy:kubernetes:context
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIRCTL_TRUST_DOMAIN }}"
+      - task: deploy:kubernetes:dirctl
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIRCTL_TRUST_DOMAIN }}"
+          HELM_EXTRA_ARGS: "-f /tmp/client-federation.yaml"
+
+      # Display completion status
+      - |
+        source /tmp/spire-addresses.env
+        echo "=============================================="
+        echo "SPIRE federation test deployment complete!"
+        echo "=============================================="
+        echo "DIR Server: ${DIR_SERVER_ADDRESS}"
+        echo "DIR Bundle: ${DIR_BUNDLE_ADDRESS}"
+        echo "DIRCTL Bundle: ${DIRCTL_BUNDLE_ADDRESS}"
+        echo ""
+        echo "Trust domains setup:"
+        echo "  DIR: {{ .DIR_TRUST_DOMAIN }}"
+        echo "  DIRCTL Internal: {{ .DIR_TRUST_DOMAIN }}"
+        echo "  DIRCTL External: {{ .DIRCTL_TRUST_DOMAIN }}"
+        echo ""
+        echo "To verify deployment:"
+        echo "  kubectl --context kind-{{ .DIR_TRUST_DOMAIN }} get pods -n dir-server"
+        echo "  kubectl --context kind-{{ .DIR_TRUST_DOMAIN }} logs -n dir-client -l app.kubernetes.io/name=dirctl"
+        echo "  kubectl --context kind-{{ .DIRCTL_TRUST_DOMAIN }} logs -n dir-client -l app.kubernetes.io/name=dirctl"
+        echo ""
+        echo "To cleanup:"
+        echo "  task test:spire:cleanup"
+
+  test:spire:cleanup:
+    desc: Cleanup SPIRE federation test clusters
+    vars:
+      DIR_TRUST_DOMAIN: '{{ .DIR_TRUST_DOMAIN | default "dir.example" }}'
+      DIRCTL_TRUST_DOMAIN: '{{ .DIRCTL_TRUST_DOMAIN | default "dirctl.example" }}'
+    cmds:
+      - echo "Cleaning up DIR cluster ({{ .DIR_TRUST_DOMAIN }})..."
+      - task: deploy:kubernetes:cleanup
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIR_TRUST_DOMAIN }}"
+      - echo "Cleaning up DIRCTL cluster ({{ .DIRCTL_TRUST_DOMAIN }})..."
+      - task: deploy:kubernetes:cleanup
+        vars:
+          KIND_CLUSTER_NAME: "{{ .DIRCTL_TRUST_DOMAIN }}"
+      - echo "Cleanup complete!"
+
+  test:e2e:coverage:
+    desc: Run end-to-end tests with coverage
+    aliases: [e2e:coverage]
+    deps:
+      - build:coverage
+    vars:
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
+    cmds:
+      - echo "Removing existing coverage directory and reports"
+      - rm -rf {{.COVERAGE_DIR}}/*
+      - echo "Creating new coverage directory"
+      - mkdir -p {{.COVERAGE_DIR}}
+      - E2E_COVERAGE_ENABLED=true task test:e2e
+      - task: test:e2e:coverage:process
+        vars:
+          COVERAGE_DIR: "{{ .COVERAGE_DIR }}"
+
+  test:e2e:coverage:extract-pods:
+    desc: Extract coverage data from Kubernetes pods
+    internal: true
+    vars:
+      E2E_COVERAGE_ENABLED: '{{ .E2E_COVERAGE_ENABLED | default "false" }}'
+      NAMESPACE: '{{ .NAMESPACE | default "dir-server" }}'
+      POD_SELECTOR: '{{ .POD_SELECTOR | default "app.kubernetes.io/name=apiserver" }}'
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e/pods") }}'
+    cmds:
+      - |
+        if [ "{{.E2E_COVERAGE_ENABLED}}" = "true" ]; then
+          echo "[coverage] Triggering graceful shutdown of pod to flush coverage data..."
+          
+          # Get pod matching the selector
+          POD_NAME=$({{.KUBECTL_BIN}} get pods -n {{.NAMESPACE}} -l {{.POD_SELECTOR}} -o jsonpath='{.items[*].metadata.name}')
+          
+            if [ -n "$POD_NAME" ]; then
+              # Send SIGTERM to PID 1 to trigger coverage flush (like the PoC)
+              echo "[coverage] Sending SIGTERM to PID 1 in pod: $POD_NAME"
+              {{.KUBECTL_BIN}} exec -n {{.NAMESPACE}} $POD_NAME -- sh -c 'kill -TERM 1' 2>/dev/null || true
+              
+              # Wait for container to restart (coverage files persist in emptyDir volume)
+              echo "[coverage] Waiting for container to restart and coverage to be flushed..."
+              sleep 5
+
+              # Extract coverage files (emptyDir persists across container restarts)
+              echo "[coverage] Extracting coverage data from pod: $POD_NAME"
+              mkdir -p {{.COVERAGE_DIR}}/pod-$POD_NAME
+              {{.KUBECTL_BIN}} cp -n {{.NAMESPACE}} $POD_NAME:/tmp/coverage {{.COVERAGE_DIR}}/pod-$POD_NAME 2>&1 || echo "[coverage][warn] Failed to extract from $POD_NAME"
+          else
+            echo "[coverage][warn] No pod found matching selector {{.POD_SELECTOR}}"
+          fi
+          echo "[coverage] Coverage data extracted to {{.COVERAGE_DIR}}"
+        else
+          echo "[coverage] E2E_COVERAGE_ENABLED is false, skipping pod coverage extraction"
+        fi
+
+  test:e2e:coverage:process:
+    desc: Collect and merge E2E coverage data from pods
+    vars:
+      COVERAGE_DIR: '{{ .COVERAGE_DIR | default (print .ROOT_DIR "/.coverage/e2e") }}'
+    cmds:
+      - |
+        echo "[e2e-coverage] Collecting and merging E2E coverage data from pods"
+        if [ -d "{{.COVERAGE_DIR}}/pods" ]; then
+          # Build comma-separated list of pod directories
+          pod_dirs=$(find {{.COVERAGE_DIR}}/pods -mindepth 1 -maxdepth 1 -type d 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+          
+          if [ -n "$pod_dirs" ]; then
+            echo "  Found pod coverage directories"
+            mkdir -p {{.COVERAGE_DIR}}/server-binary
+            go tool covdata merge -i="$pod_dirs" -o={{.COVERAGE_DIR}}/server-binary
+            go tool covdata textfmt -i={{.COVERAGE_DIR}}/server-binary -o={{.COVERAGE_DIR}}/server.out.tmp
+            # Filter out generated files (matching codecov.yml ignores)
+            if [ -f {{.COVERAGE_DIR}}/server.out.tmp ]; then
+              grep -v "\.pb\.go" {{.COVERAGE_DIR}}/server.out.tmp | grep -v "mock_.*\.go" > {{.COVERAGE_DIR}}/server.out || echo "mode: atomic" > {{.COVERAGE_DIR}}/server.out
+              rm {{.COVERAGE_DIR}}/server.out.tmp
+            fi
+          else
+            echo "No pod coverage found"
+          fi
+        else
+          echo "No pods directory found"
+        fi
 
   ##
   ## Linters
@@ -570,8 +1559,6 @@ tasks:
     vars:
       FIX: '{{ .FIX | default "false" }}'
       FIX_FLAG: '{{if eq .FIX "true"}}--fix{{end}}'
-      GO_MOD_DIR:
-        sh: find . -name go.mod -exec dirname {} \;
     cmds:
       - for: { var: GO_MOD_DIR }
         cmd: |
@@ -584,9 +1571,9 @@ tasks:
     deps:
       - task: deps:protoc
       - task: deps:bufbuild
-    dir: ./api
+    dir: ./proto
     cmds:
-      - '{{.BUFBUILD_BIN}} lint'
+      - "{{.BUFBUILD_BIN}} lint"
 
   lint:
     desc: Run all linters
@@ -601,9 +1588,6 @@ tasks:
     desc: Check licenses
     deps:
       - task: deps:licensei
-    vars:
-      GO_MOD_DIR:
-        sh: find . -name go.mod -exec dirname {} \;
     cmds:
       - for: { var: GO_MOD_DIR }
         cmd: echo "Running licensei in {{.ITEM}}" && cd {{.ITEM}} && {{ .LICENSEI_BIN }} check --config {{.ROOT_DIR}}/.licensei.toml
@@ -612,9 +1596,6 @@ tasks:
     desc: Check licenses
     deps:
       - task: deps:licensei
-    vars:
-      GO_MOD_DIR:
-        sh: find . -name go.mod -exec dirname {} \;
     cmds:
       - for: { var: GO_MOD_DIR }
         cmd: echo "Running licensei in {{.ITEM}}" && cd {{.ITEM}} && {{ .LICENSEI_BIN }} cache --config {{.ROOT_DIR}}/.licensei.toml
@@ -632,26 +1613,26 @@ tasks:
     vars:
       RECORD_FILE: '{{ .RECORD_FILE | default "docs/research/integrations/demo.record.json" }}'
     cmd: |
-        # Prepare Python environment
-        python3 -m venv venv
-        . ./venv/bin/activate
-        python3 -m pip install pyyaml
+      # Prepare Python environment
+      python3 -m venv venv
+      . ./venv/bin/activate
+      python3 -m pip install pyyaml
 
-        # Run script
-        python3 ./importer.py \
-          -record={{.ROOT_DIR}}/{{.RECORD_FILE}} \
-          -vscode_path={{.ROOT_DIR}}/.vscode \
-          -continue_path={{.ROOT_DIR}}/.continue/assistants
+      # Run script
+      python3 ./importer.py \
+        -record={{.ROOT_DIR}}/{{.RECORD_FILE}} \
+        -vscode_path={{.ROOT_DIR}}/.vscode \
+        -continue_path={{.ROOT_DIR}}/.continue/assistants
 
-        # Print env requirements
-        cat .env.example
+      # Print env requirements
+      cat .env.example
 
   poc:mcp-to-oasf:
     desc: Import MCP-to-OASF Exporter Agent into the current workspace.
     cmds:
       - task: poc:integration
         vars:
-          RECORD_FILE: 'docs/research/integrations/mcp-to-oasf-agent/extractor.record.json'
+          RECORD_FILE: "docs/research/integrations/mcp-to-oasf-agent/extractor.record.json"
 
   ##
   ## Dependencies
@@ -664,69 +1645,8 @@ tasks:
       - task: deps:kind
       - task: deps:protoc
       - task: deps:bufbuild
-
-  deps:hub:api:
-    desc: generate HUB API
-    dir: hub/api
-    cmds:
-      - task: deps:hub:api:clean
-      - task: deps:hub:api:dirs
-      - task: deps:hub:api:files
-      - task: deps:hub:api:gen
-      - cmd: cp -r saas/v1alpha1 .
-      - task: deps:hub:api:gen:cleanup
-      - cmd: go mod tidy
-
-  deps:hub:api:dirs:
-    desc: Create HUB API directories
-    dir: hub/api
-    cmds:
-      - mkdir -p saas/v1alpha1
-      - mkdir -p core/v1alpha1
-
-  deps:hub:api:files:
-    desc: Sync HUB proto files to the given version
-    vars:
-      HUB_API_VERSION: '{{ .HUB_API_VERSION }}'
-    dir: hub/api
-    cmd: |
-      mkdir -p .tmp
-      git clone {{.HUB_REPO_URL}} .tmp
-      git checkout {{.HUB_API_VERSION}}
-      cp -r \
-        .tmp/api/saas/v1alpha1/agent.proto \
-        .tmp/api/saas/v1alpha1/agent_id.proto \
-        .tmp/api/saas/v1alpha1/agent_id_response.proto \
-        .tmp/api/saas/v1alpha1/agent_service.proto \
-        .tmp/api/saas/v1alpha1/category.proto \
-        .tmp/api/saas/v1alpha1/locator.proto \
-        .tmp/api/saas/v1alpha1/repo_version_id.proto \
-        saas/v1alpha1
-      rm -rf .tmp
-      cp -r ../../api/core/v1alpha1/*.proto ./core/v1alpha1
-
-  deps:hub:api:gen:
-    desc: Generate HUB API stubs
-    deps:
-      - deps:bufbuild
-      - deps:hub:api:files
-    dir: hub/api
-    cmd: |
-      {{.BUFBUILD_BIN}} dep update
-      {{.BUFBUILD_BIN}} generate
-
-  deps:hub:api:gen:cleanup:
-    desc: Clean HUB API stubs
-    dir: hub/api
-    cmds:
-      - rm -rf core || true
-      - rm -rf saas || true
-
-  deps:hub:api:clean:
-    desc: Lint HUB API stubs
-    dir: hub/api
-    cmds:
-      - cmd: rm -rf v1alpha1
+      - task: deps:uv
+      - task: deps:cosign
 
   deps:bin-dir:
     desc: Create bin directory
@@ -834,9 +1754,6 @@ tasks:
 
   deps:tidy:
     desc: Ensure dependencies are up-to-date
-    vars:
-      GO_MOD_DIR:
-        sh: find . -name go.mod -exec dirname {} \;
     cmds:
       - for: { var: GO_MOD_DIR }
         cmd: go -C {{.ITEM}} mod tidy -go={{.GO_VERSION}}
@@ -847,7 +1764,7 @@ tasks:
     deps:
       - deps:bin-dir
     vars:
-      MULTIMOD_REPO_DIR: '{{ .BIN_DIR }}/opentelemetry-go-build-tools'
+      MULTIMOD_REPO_DIR: "{{ .BIN_DIR }}/opentelemetry-go-build-tools"
     cmds:
       - git clone https://github.com/open-telemetry/opentelemetry-go-build-tools --branch multimod/v{{.MULTIMOD_VERSION}} {{.MULTIMOD_REPO_DIR}}
       - go build -C {{.MULTIMOD_REPO_DIR}}/multimod -o {{.MULTIMOD_BIN}} main.go
@@ -885,7 +1802,7 @@ tasks:
     deps:
       - deps:bin-dir
     env:
-      UV_INSTALL_DIR: '{{ .BIN_DIR }}'
+      UV_INSTALL_DIR: "{{ .BIN_DIR }}"
     cmds:
       - curl -sfL https://astral.sh/uv/{{.UV_VERSION}}/install.sh | sh
       - mv {{.BIN_DIR}}/uv {{.UV_BIN}}
@@ -893,6 +1810,23 @@ tasks:
       - rm {{.BIN_DIR}}/uvx
     status:
       - test -x {{.BIN_DIR}}/uv
+
+  deps:cosign:
+    desc: Install sigstore cosign
+    dir: "{{ .BIN_DIR }}"
+    internal: true
+    cmds:
+      - curl -sfL https://github.com/sigstore/cosign/releases/download/v{{.COSIGN_VERSION}}/cosign-{{OS}}-{{ARCH}} -o cosign-{{.COSIGN_VERSION}}
+      - chmod +x cosign-{{.COSIGN_VERSION}}
+    status:
+      - test -x cosign-{{.COSIGN_VERSION}}
+
+  deps:htpasswd:
+    desc: Install htpasswd
+    dir: "{{ .BIN_DIR }}"
+    internal: true
+    cmds:
+      - npm install -g htpasswd
 
   ##
   ## Helm
@@ -907,8 +1841,9 @@ tasks:
         sh: find . -name Chart.yaml -exec dirname {} \;
     cmds:
       # Add Helm repo
-      - '{{ .HELM_BIN }} repo add project-zot http://zotregistry.dev/helm-charts'
+      - "{{ .HELM_BIN }} repo add project-zot http://zotregistry.dev/helm-charts"
+      - "{{ .HELM_BIN }} repo add spiffe https://spiffe.github.io/helm-charts-hardened"
 
       # Update dependencies
       - for: { var: HELM_ALL_CHART_PATHS }
-        cmd: 'cd {{ .ITEM }} && {{ .HELM_BIN }} dependency update'
+        cmd: "cd {{ .ITEM }} && {{ .HELM_BIN }} dependency update"

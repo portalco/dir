@@ -9,18 +9,14 @@ import (
 	"fmt"
 	"io"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
-	routingtypes "github.com/agntcy/dir/api/routing/v1alpha1"
+	routingv1 "github.com/agntcy/dir/api/routing/v1"
 	"github.com/agntcy/dir/utils/logging"
 )
 
 var logger = logging.Logger("client")
 
-func (c *Client) Publish(ctx context.Context, ref *coretypes.ObjectRef, network bool) error {
-	_, err := c.RoutingServiceClient.Publish(ctx, &routingtypes.PublishRequest{
-		Record:  ref,
-		Network: &network,
-	})
+func (c *Client) Publish(ctx context.Context, req *routingv1.PublishRequest) error {
+	_, err := c.RoutingServiceClient.Publish(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to publish object: %w", err)
 	}
@@ -28,13 +24,13 @@ func (c *Client) Publish(ctx context.Context, ref *coretypes.ObjectRef, network 
 	return nil
 }
 
-func (c *Client) List(ctx context.Context, req *routingtypes.ListRequest) (<-chan *routingtypes.ListResponse_Item, error) {
+func (c *Client) List(ctx context.Context, req *routingv1.ListRequest) (<-chan *routingv1.ListResponse, error) {
 	stream, err := c.RoutingServiceClient.List(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create list stream: %w", err)
 	}
 
-	resCh := make(chan *routingtypes.ListResponse_Item, 100) //nolint:mnd
+	resCh := make(chan *routingv1.ListResponse, 100) //nolint:mnd
 
 	go func() {
 		defer close(resCh)
@@ -51,9 +47,14 @@ func (c *Client) List(ctx context.Context, req *routingtypes.ListRequest) (<-cha
 				return
 			}
 
-			items := obj.GetItems()
-			for _, item := range items {
-				resCh <- item
+			// Stream ListResponse directly (no legacy wrapper)
+			// Use select to prevent goroutine leak if consumer stops reading
+			select {
+			case resCh <- obj:
+			case <-ctx.Done():
+				logger.Error("context cancelled while receiving list response", "error", ctx.Err())
+
+				return
 			}
 		}
 	}()
@@ -61,11 +62,46 @@ func (c *Client) List(ctx context.Context, req *routingtypes.ListRequest) (<-cha
 	return resCh, nil
 }
 
-func (c *Client) Unpublish(ctx context.Context, ref *coretypes.ObjectRef, network bool) error {
-	_, err := c.RoutingServiceClient.Unpublish(ctx, &routingtypes.UnpublishRequest{
-		Record:  ref,
-		Network: &network,
-	})
+func (c *Client) SearchRouting(ctx context.Context, req *routingv1.SearchRequest) (<-chan *routingv1.SearchResponse, error) {
+	stream, err := c.RoutingServiceClient.Search(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create search stream: %w", err)
+	}
+
+	resCh := make(chan *routingv1.SearchResponse, 100) //nolint:mnd
+
+	go func() {
+		defer close(resCh)
+
+		for {
+			obj, err := stream.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			if err != nil {
+				logger.Error("error receiving search result", "error", err)
+
+				return
+			}
+
+			// Stream SearchResponse directly
+			// Use select to prevent goroutine leak if consumer stops reading
+			select {
+			case resCh <- obj:
+			case <-ctx.Done():
+				logger.Error("context cancelled while receiving search response", "error", ctx.Err())
+
+				return
+			}
+		}
+	}()
+
+	return resCh, nil
+}
+
+func (c *Client) Unpublish(ctx context.Context, req *routingv1.UnpublishRequest) error {
+	_, err := c.RoutingServiceClient.Unpublish(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to unpublish object: %w", err)
 	}

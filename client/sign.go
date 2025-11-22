@@ -1,31 +1,17 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-//nolint:mnd,wsl
 package client
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	signv1 "github.com/agntcy/dir/api/sign/v1"
+	storev1 "github.com/agntcy/dir/api/store/v1"
 	"github.com/agntcy/dir/utils/cosign"
-	v1 "github.com/sigstore/protobuf-specs/gen/pb-go/trustroot/v1"
-	"github.com/sigstore/sigstore-go/pkg/root"
-	"github.com/sigstore/sigstore-go/pkg/sign"
-	"google.golang.org/protobuf/encoding/protojson"
-)
-
-const (
-	DefaultFulcioURL       = "https://fulcio.sigstage.dev"
-	DefaultRekorURL        = "https://rekor.sigstage.dev"
-	DefaultTimestampURL    = "https://timestamp.sigstage.dev/api/v1/timestamp"
-	DefaultOIDCProviderURL = "https://oauth2.sigstage.dev/auth"
-	DefaultOIDCClientID    = "sigstore"
 )
 
 type SignOpts struct {
@@ -38,169 +24,174 @@ type SignOpts struct {
 	Key             string
 }
 
-// SignOIDC signs the agent using keyless OIDC service-based signing.
-// The OIDC ID Token must be provided by the caller.
-// An ephemeral keypair is generated for signing.
-func (c *Client) SignOIDC(ctx context.Context, agent *coretypes.Agent, idToken string, options SignOpts) (*coretypes.Agent, error) {
+// Sign routes to the appropriate signing method based on provider type.
+// This is the main entry point for signing operations.
+func (c *Client) Sign(ctx context.Context, req *signv1.SignRequest) (*signv1.SignResponse, error) {
+	if req.GetProvider() == nil {
+		return nil, errors.New("signature provider must be specified")
+	}
+
+	switch provider := req.GetProvider().GetRequest().(type) {
+	case *signv1.SignRequestProvider_Key:
+		return c.SignWithKey(ctx, req)
+	case *signv1.SignRequestProvider_Oidc:
+		return c.SignWithOIDC(ctx, req)
+	default:
+		return nil, fmt.Errorf("unsupported signature provider type: %T", provider)
+	}
+}
+
+// SignWithOIDC signs the record using keyless OIDC service-based signing.
+// The OIDC ID Token can be provided by the caller, or cosign will handle interactive OIDC flow.
+// This implementation uses cosign sign-blob command for OIDC signing.
+func (c *Client) SignWithOIDC(ctx context.Context, req *signv1.SignRequest) (*signv1.SignResponse, error) {
 	// Validate request.
-	if agent == nil {
-		return nil, errors.New("agent must be set")
+	if req.GetRecordRef() == nil {
+		return nil, errors.New("record ref must be set")
 	}
 
-	// Load signing options.
-	var signOpts sign.BundleOptions
-	{
-		// Define config to use for signing.
-		signingConfig, err := root.NewSigningConfig(
-			root.SigningConfigMediaType02,
-			// Fulcio URLs
-			[]root.Service{
-				{
-					URL:                 options.FulcioURL,
-					MajorAPIVersion:     1,
-					ValidityPeriodStart: time.Now().Add(-time.Hour),
-					ValidityPeriodEnd:   time.Now().Add(time.Hour),
-				},
-			},
-			// OIDC Provider URLs
-			// Usage and requirements: https://docs.sigstore.dev/certificate_authority/oidc-in-fulcio/
-			[]root.Service{
-				{
-					URL:                 options.OIDCProviderURL,
-					MajorAPIVersion:     1,
-					ValidityPeriodStart: time.Now().Add(-time.Hour),
-					ValidityPeriodEnd:   time.Now().Add(time.Hour),
-				},
-			},
-			// Rekor URLs
-			[]root.Service{
-				{
-					URL:                 options.RekorURL,
-					MajorAPIVersion:     1,
-					ValidityPeriodStart: time.Now().Add(-time.Hour),
-					ValidityPeriodEnd:   time.Now().Add(time.Hour),
-				},
-			},
-			root.ServiceConfiguration{
-				Selector: v1.ServiceSelector_ANY,
-			},
-			[]root.Service{
-				{
-					URL:                 options.TimestampURL,
-					MajorAPIVersion:     1,
-					ValidityPeriodStart: time.Now().Add(-time.Hour),
-					ValidityPeriodEnd:   time.Now().Add(time.Hour),
-				},
-			},
-			root.ServiceConfiguration{
-				Selector: v1.ServiceSelector_ANY,
-			},
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create signing config: %w", err)
-		}
+	oidcSigner := req.GetProvider().GetOidc()
 
-		// Use fulcio to sign the agent.
-		fulcioURL, err := root.SelectService(signingConfig.FulcioCertificateAuthorityURLs(), []uint32{1}, time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("failed to select fulcio URL: %w", err)
-		}
-		fulcioOpts := &sign.FulcioOptions{
-			BaseURL: fulcioURL,
-			Timeout: 30 * time.Second,
-			Retries: 1,
-		}
-		signOpts.CertificateProvider = sign.NewFulcio(fulcioOpts)
-		signOpts.CertificateProviderOptions = &sign.CertificateProviderOptions{
-			IDToken: idToken,
-		}
-
-		// Use timestamp authortiy to sign the agent.
-		tsaURLs, err := root.SelectServices(signingConfig.TimestampAuthorityURLs(),
-			signingConfig.TimestampAuthorityURLsConfig(), []uint32{1}, time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("failed to select timestamp authority URL: %w", err)
-		}
-		for _, tsaURL := range tsaURLs {
-			tsaOpts := &sign.TimestampAuthorityOptions{
-				URL:     tsaURL,
-				Timeout: 30 * time.Second,
-				Retries: 1,
-			}
-			signOpts.TimestampAuthorities = append(signOpts.TimestampAuthorities, sign.NewTimestampAuthority(tsaOpts))
-		}
-
-		// Use rekor to sign the agent.
-		rekorURLs, err := root.SelectServices(signingConfig.RekorLogURLs(),
-			signingConfig.RekorLogURLsConfig(), []uint32{1}, time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("failed to select rekor URL: %w", err)
-		}
-		for _, rekorURL := range rekorURLs {
-			rekorOpts := &sign.RekorOptions{
-				BaseURL: rekorURL,
-				Timeout: 90 * time.Second,
-				Retries: 1,
-			}
-			signOpts.TransparencyLogs = append(signOpts.TransparencyLogs, sign.NewRekor(rekorOpts))
-		}
-	}
-
-	// Generate an ephemeral keypair for signing.
-	signKeypair, err := sign.NewEphemeralKeypair(nil)
+	digest, err := corev1.ConvertCIDToDigest(req.GetRecordRef().GetCid())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ephemeral keypair: %w", err)
+		return nil, fmt.Errorf("failed to convert CID to digest: %w", err)
 	}
 
-	return c.Sign(ctx, agent, signKeypair, signOpts)
+	payloadBytes, err := cosign.GeneratePayload(digest.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payload: %w", err)
+	}
+
+	// Prepare options for signing
+	signOpts := &cosign.SignBlobOIDCOptions{
+		Payload: payloadBytes,
+		IDToken: oidcSigner.GetIdToken(),
+	}
+
+	// Set URLs from options if provided
+	if opts := oidcSigner.GetOptions(); opts != nil {
+		signOpts.FulcioURL = opts.GetFulcioUrl()
+		signOpts.RekorURL = opts.GetRekorUrl()
+		signOpts.TimestampURL = opts.GetTimestampUrl()
+		signOpts.OIDCProviderURL = opts.GetOidcProviderUrl()
+	}
+
+	// Sign using utility function
+	result, err := cosign.SignBlobWithOIDC(ctx, signOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign with OIDC: %w", err)
+	}
+
+	signatureObj := &signv1.Signature{
+		Signature: result.Signature,
+		Annotations: map[string]string{
+			"payload": string(payloadBytes),
+		},
+	}
+
+	// Push signature and public key to store
+	err = c.pushReferrersToStore(ctx, req.GetRecordRef().GetCid(), signatureObj, result.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to push referrers to store: %w", err)
+	}
+
+	return &signv1.SignResponse{
+		Signature: signatureObj,
+	}, nil
 }
 
-func (c *Client) SignWithKey(ctx context.Context, privKey []byte, pw []byte, agent *coretypes.Agent) (*coretypes.Agent, error) {
-	// Generate a keypair from the provided private key bytes.
-	// The keypair hint is derived from the public key and will be used for verification.
-	signKeypair, err := cosign.LoadKeypair(privKey, pw)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create keypair: %w", err)
+func (c *Client) SignWithKey(ctx context.Context, req *signv1.SignRequest) (*signv1.SignResponse, error) {
+	keySigner := req.GetProvider().GetKey()
+
+	password := keySigner.GetPassword()
+	if password == nil {
+		password = []byte("") // Empty password is valid for cosign.
 	}
 
-	return c.Sign(ctx, agent, signKeypair, sign.BundleOptions{})
+	digest, err := corev1.ConvertCIDToDigest(req.GetRecordRef().GetCid())
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert CID to digest: %w", err)
+	}
+
+	payloadBytes, err := cosign.GeneratePayload(digest.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate payload: %w", err)
+	}
+
+	// Prepare options for signing
+	signOpts := &cosign.SignBlobKeyOptions{
+		Payload:    payloadBytes,
+		PrivateKey: keySigner.GetPrivateKey(),
+		Password:   password,
+	}
+
+	// Sign using utility function
+	result, err := cosign.SignBlobWithKey(ctx, signOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign with key: %w", err)
+	}
+
+	// Create the signature object
+	signatureObj := &signv1.Signature{
+		Signature: result.Signature,
+		Annotations: map[string]string{
+			"payload": string(payloadBytes),
+		},
+	}
+
+	// Push signature and public key to store
+	err = c.pushReferrersToStore(ctx, req.GetRecordRef().GetCid(), signatureObj, result.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to push referrers to store: %w", err)
+	}
+
+	return &signv1.SignResponse{
+		Signature: signatureObj,
+	}, nil
 }
 
-func (c *Client) Sign(_ context.Context, agent *coretypes.Agent, signKeypair sign.Keypair, signOpts sign.BundleOptions) (*coretypes.Agent, error) {
-	// Reset the signature field in the agent.
-	// This is required as the agent may have been signed before,
-	// but also because this ensures signing idempotency.
-	agent.Signature = nil
+func (c *Client) pushReferrersToStore(ctx context.Context, recordCID string, signature *signv1.Signature, publicKey string) error {
+	if recordCID == "" {
+		return errors.New("record CID is required")
+	}
 
-	// Convert the agent to JSON.
-	agentJSON, err := json.Marshal(agent)
+	// Create public key referrer
+	pk := &signv1.PublicKey{
+		Key: publicKey,
+	}
+
+	publicKeyReferrer, err := pk.MarshalReferrer()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal agent: %w", err)
+		return fmt.Errorf("failed to encode public key to referrer: %w", err)
 	}
 
-	// Sign the agent JSON data.
-	sigBundle, err := sign.Bundle(&sign.PlainData{Data: agentJSON}, signKeypair, signOpts)
+	// Push public key to store as a referrer
+	err = c.PushReferrer(ctx, &storev1.PushReferrerRequest{
+		RecordRef: &corev1.RecordRef{
+			Cid: recordCID,
+		},
+		Referrer: publicKeyReferrer,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to sign agent: %w", err)
+		return fmt.Errorf("failed to store public key: %w", err)
 	}
-	certData := sigBundle.GetVerificationMaterial()
-	sigData := sigBundle.GetMessageSignature()
 
-	// Extract data from the signature bundle.
-	sigBundleJSON, err := protojson.Marshal(sigBundle)
+	// Create signature referrer
+	signatureReferrer, err := signature.MarshalReferrer()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal bundle: %w", err)
+		return fmt.Errorf("failed to encode signature to referrer: %w", err)
 	}
 
-	// Update the agent with the signature details.
-	agent.Signature = &coretypes.Signature{
-		Algorithm:     sigData.GetMessageDigest().GetAlgorithm().String(),
-		Signature:     base64.StdEncoding.EncodeToString(sigData.GetSignature()),
-		Certificate:   base64.StdEncoding.EncodeToString(certData.GetCertificate().GetRawBytes()),
-		ContentType:   sigBundle.GetMediaType(),
-		ContentBundle: base64.StdEncoding.EncodeToString(sigBundleJSON),
-		SignedAt:      time.Now().Format(time.RFC3339),
+	// Push signature to store as a referrer
+	err = c.PushReferrer(ctx, &storev1.PushReferrerRequest{
+		RecordRef: &corev1.RecordRef{
+			Cid: recordCID,
+		},
+		Referrer: signatureReferrer,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to store signature: %w", err)
 	}
 
-	return agent, nil
+	return nil
 }

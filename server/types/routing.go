@@ -6,8 +6,7 @@ package types
 import (
 	"context"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
-	routingtypes "github.com/agntcy/dir/api/routing/v1alpha1"
+	routingv1 "github.com/agntcy/dir/api/routing/v1"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -15,21 +14,30 @@ type Peer = peer.AddrInfo
 
 // RoutingAPI handles management of the routing layer.
 type RoutingAPI interface {
-	// Publish announces to the network that you are providing given object.
-	// This writes to peer and content datastore.
-	// It can perform sync to store the data to other nodes.
-	// For now, we try sync on every publish.
-	// TODO: find a better sync mechanism (buffered sync).
-	// Request can be assumed to be validated.
-	// We are only intersted in agent objects. Data on this object should be empty.
-	Publish(ctx context.Context, object *coretypes.Object, network bool) error
+	// Publish record to the network
+	// The caller must wrap concrete record types (e.g. *corev1.Record) with adapters.NewRecordAdapter()
+	Publish(context.Context, Record) error
 
-	// Search to network with a given request.
-	// This reads from content datastore.
-	// Request can be assumed to be validated.
-	List(context.Context, *routingtypes.ListRequest) (<-chan *routingtypes.ListResponse_Item, error)
+	// List all records that this peer is currently providing (local-only operation)
+	List(context.Context, *routingv1.ListRequest) (<-chan *routingv1.ListResponse, error)
 
-	// Unpublish removes the object from the network.
-	// This removes the object from peer and content datastore.
-	Unpublish(ctx context.Context, object *coretypes.Object, network bool) error
+	// Search for records across the network using cached remote announcements
+	Search(context.Context, *routingv1.SearchRequest) (<-chan *routingv1.SearchResponse, error)
+
+	// Unpublish record from the network
+	// The caller must wrap concrete record types (e.g. *corev1.Record) with adapters.NewRecordAdapter()
+	Unpublish(context.Context, Record) error
+
+	// Stop stops the routing services and releases resources
+	// Should be called during server shutdown for graceful cleanup
+	Stop() error
+
+	// IsReady checks if the routing subsystem is ready to serve traffic.
+	IsReady(context.Context) bool
+}
+
+// PublicationAPI handles management of publication tasks.
+type PublicationAPI interface {
+	// CreatePublication creates a new publication task to be processed.
+	CreatePublication(context.Context, *routingv1.PublishRequest) (string, error)
 }

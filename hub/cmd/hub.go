@@ -8,14 +8,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/agntcy/dir/hub/client/okta"
+	"github.com/agntcy/dir/hub/cmd/apikey"
+	"github.com/agntcy/dir/hub/cmd/info"
 	"github.com/agntcy/dir/hub/cmd/login"
 	"github.com/agntcy/dir/hub/cmd/logout"
 	"github.com/agntcy/dir/hub/cmd/options"
 	"github.com/agntcy/dir/hub/cmd/orgs"
 	"github.com/agntcy/dir/hub/cmd/pull"
 	"github.com/agntcy/dir/hub/cmd/push"
+	"github.com/agntcy/dir/hub/cmd/sign"
+	"github.com/agntcy/dir/hub/cmd/verify"
 	"github.com/agntcy/dir/hub/config"
 	"github.com/agntcy/dir/hub/sessionstore"
 	"github.com/agntcy/dir/hub/utils/file"
@@ -40,8 +45,14 @@ func NewHubCommand(ctx context.Context, baseOption *options.BaseOption) *cobra.C
 
 	opts := options.NewHubOptions(baseOption, cmd)
 
+	var noCache bool
+
+	cmd.PersistentFlags().BoolVar(&noCache, "no-cache", false, "Skip session file operations and use only API key authentication")
+
 	//nolint:contextcheck // context is set via cmd.SetContext(ctx) and accessed via cmd.Context()
 	cmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		cmd.SetOut(os.Stdout)
+		cmd.SetErr(os.Stderr)
 		opts.Complete()
 
 		sessionStore := sessionstore.NewFileSessionStore(file.GetSessionFilePath())
@@ -67,6 +78,7 @@ func NewHubCommand(ctx context.Context, baseOption *options.BaseOption) *cobra.C
 			IdpBackendAddress:  authConfig.IdpBackendAddress,
 			IdpIssuerAddress:   authConfig.IdpIssuerAddress,
 			HubBackendAddress:  authConfig.HubBackendAddress,
+			APIKeyClientID:     authConfig.APIKeyClientID,
 		}
 
 		// Only refresh token if not running login or logout
@@ -77,8 +89,13 @@ func NewHubCommand(ctx context.Context, baseOption *options.BaseOption) *cobra.C
 			}
 		}
 
-		if err := sessionStore.SaveHubSession(opts.ServerAddress, currentSession); err != nil {
-			return fmt.Errorf("failed to save updated session with auth config: %w", err)
+		// If --no-cache is specified, skip all session file operations
+		if cmd.Flags().Changed("no-cache") {
+			fmt.Fprintf(cmd.OutOrStdout(), "Skipping session file operations due to --no-cache flag\n")
+		} else {
+			if err := sessionStore.SaveHubSession(opts.ServerAddress, currentSession); err != nil {
+				return fmt.Errorf("failed to save updated session with auth config: %w", err)
+			}
 		}
 
 		// Attach the session to cmd.Context()
@@ -92,8 +109,12 @@ func NewHubCommand(ctx context.Context, baseOption *options.BaseOption) *cobra.C
 		login.NewCommand(opts),
 		logout.NewCommand(opts),
 		push.NewCommand(opts),
-		pull.NewCommand(),
+		pull.NewCommand(opts),
 		orgs.NewCommand(opts),
+		apikey.NewCommand(opts),
+		info.NewCommand(opts),
+		sign.NewCommand(opts),
+		verify.NewCommand(opts),
 	)
 
 	return cmd

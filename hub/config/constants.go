@@ -9,7 +9,5 @@ const (
 	LocalWebserverPort = 48043
 
 	// DefaultHubAddress is the default URL for the Agent Hub service.
-	DefaultHubAddress = "https://hub.agntcy.org"
-	// DefaultHubBackendGRPCPort is the default gRPC port for the Agent Hub backend.
-	DefaultHubBackendGRPCPort = 443
+	DefaultHubAddress = "https://agent-directory.outshift.com"
 )

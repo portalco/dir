@@ -6,11 +6,11 @@ package controller
 import (
 	"context"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
-	routingtypes "github.com/agntcy/dir/api/routing/v1alpha1"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	routingv1 "github.com/agntcy/dir/api/routing/v1"
 	"github.com/agntcy/dir/server/types"
+	"github.com/agntcy/dir/server/types/adapters"
 	"github.com/agntcy/dir/utils/logging"
-	"github.com/opencontainers/go-digest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -19,43 +19,38 @@ import (
 var routingLogger = logging.Logger("controller/routing")
 
 type routingCtlr struct {
-	routingtypes.UnimplementedRoutingServiceServer
-	routing types.RoutingAPI
-	store   types.StoreAPI
+	routingv1.UnimplementedRoutingServiceServer
+	routing     types.RoutingAPI
+	store       types.StoreAPI
+	publication types.PublicationAPI
 }
 
-func NewRoutingController(routing types.RoutingAPI, store types.StoreAPI) routingtypes.RoutingServiceServer {
+func NewRoutingController(routing types.RoutingAPI, store types.StoreAPI, publication types.PublicationAPI) routingv1.RoutingServiceServer {
 	return &routingCtlr{
 		routing:                           routing,
 		store:                             store,
-		UnimplementedRoutingServiceServer: routingtypes.UnimplementedRoutingServiceServer{},
+		publication:                       publication,
+		UnimplementedRoutingServiceServer: routingv1.UnimplementedRoutingServiceServer{},
 	}
 }
 
-func (c *routingCtlr) Publish(ctx context.Context, req *routingtypes.PublishRequest) (*emptypb.Empty, error) {
+func (c *routingCtlr) Publish(ctx context.Context, req *routingv1.PublishRequest) (*emptypb.Empty, error) {
 	routingLogger.Debug("Called routing controller's Publish method", "req", req)
 
-	ref, agent, err := c.getAgent(ctx, req.GetRecord())
+	// Create publication to be handled by the publication service
+	publicationID, err := c.publication.CreatePublication(ctx, req)
 	if err != nil {
-		st := status.Convert(err)
+		routingLogger.Error("Failed to create publication", "error", err)
 
-		return nil, status.Errorf(st.Code(), "failed to get agent: %s", st.Message())
+		return nil, status.Errorf(codes.Internal, "failed to create publication: %v", err)
 	}
 
-	err = c.routing.Publish(ctx, &coretypes.Object{
-		Ref:   ref,
-		Agent: agent,
-	}, req.GetNetwork())
-	if err != nil {
-		st := status.Convert(err)
-
-		return nil, status.Errorf(st.Code(), "failed to publish: %s", st.Message())
-	}
+	routingLogger.Info("Publication created successfully", "publication_id", publicationID)
 
 	return &emptypb.Empty{}, nil
 }
 
-func (c *routingCtlr) List(req *routingtypes.ListRequest, srv routingtypes.RoutingService_ListServer) error {
+func (c *routingCtlr) List(req *routingv1.ListRequest, srv routingv1.RoutingService_ListServer) error {
 	routingLogger.Debug("Called routing controller's List method", "req", req)
 
 	itemChan, err := c.routing.List(srv.Context(), req)
@@ -65,85 +60,90 @@ func (c *routingCtlr) List(req *routingtypes.ListRequest, srv routingtypes.Routi
 		return status.Errorf(st.Code(), "failed to list: %s", st.Message())
 	}
 
-	items := []*routingtypes.ListResponse_Item{}
-	for i := range itemChan {
-		items = append(items, i)
-	}
-
-	if err := srv.Send(&routingtypes.ListResponse{Items: items}); err != nil {
-		return status.Errorf(codes.Internal, "failed to send list response: %v", err)
+	// Stream ListResponse items directly to the client
+	for item := range itemChan {
+		if err := srv.Send(item); err != nil {
+			return status.Errorf(codes.Internal, "failed to send list response: %v", err)
+		}
 	}
 
 	return nil
 }
 
-func (c *routingCtlr) Unpublish(ctx context.Context, req *routingtypes.UnpublishRequest) (*emptypb.Empty, error) {
-	routingLogger.Debug("Called routing controller's Unpublish method", "req", req)
+func (c *routingCtlr) Search(req *routingv1.SearchRequest, srv routingv1.RoutingService_SearchServer) error {
+	routingLogger.Debug("Called routing controller's Search method", "req", req)
 
-	ref, agent, err := c.getAgent(ctx, req.GetRecord())
+	itemChan, err := c.routing.Search(srv.Context(), req)
 	if err != nil {
 		st := status.Convert(err)
 
-		return nil, status.Errorf(st.Code(), "failed to get agent: %s", st.Message())
+		return status.Errorf(st.Code(), "failed to search: %s", st.Message())
 	}
 
-	err = c.routing.Unpublish(ctx, &coretypes.Object{
-		Ref:   ref,
-		Agent: agent,
-	}, req.GetNetwork())
-	if err != nil {
-		st := status.Convert(err)
+	// Stream SearchResponse items directly to the client
+	for item := range itemChan {
+		if err := srv.Send(item); err != nil {
+			return status.Errorf(codes.Internal, "failed to send search response: %v", err)
+		}
+	}
 
-		return nil, status.Errorf(st.Code(), "failed to unpublish: %s", st.Message())
+	return nil
+}
+
+func (c *routingCtlr) Unpublish(ctx context.Context, req *routingv1.UnpublishRequest) (*emptypb.Empty, error) {
+	routingLogger.Debug("Called routing controller's Unpublish method", "req", req)
+
+	// Only handle RecordRefs, not queries
+	recordRefs, ok := req.GetRequest().(*routingv1.UnpublishRequest_RecordRefs)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "unpublish request must specify record_refs") //nolint:wrapcheck // gRPC status errors should not be wrapped
+	}
+
+	// Process each RecordRef
+	for _, ref := range recordRefs.RecordRefs.GetRefs() {
+		record, err := c.getRecord(ctx, ref)
+		if err != nil {
+			st := status.Convert(err)
+
+			return nil, status.Errorf(st.Code(), "failed to get record: %s", st.Message())
+		}
+
+		// Wrap record with adapter for interface-based unpublishing
+		adapter := adapters.NewRecordAdapter(record)
+
+		err = c.routing.Unpublish(ctx, adapter)
+		if err != nil {
+			st := status.Convert(err)
+
+			return nil, status.Errorf(st.Code(), "failed to unpublish: %s", st.Message())
+		}
+
+		routingLogger.Info("Successfully unpublished record", "cid", ref.GetCid())
 	}
 
 	return &emptypb.Empty{}, nil
 }
 
-func (c *routingCtlr) getAgent(ctx context.Context, ref *coretypes.ObjectRef) (*coretypes.ObjectRef, *coretypes.Agent, error) {
-	routingLogger.Debug("Called routing controller's getAgent method", "ref", ref)
+func (c *routingCtlr) getRecord(ctx context.Context, ref *corev1.RecordRef) (*corev1.Record, error) {
+	routingLogger.Debug("Called routing controller's getRecord method", "ref", ref)
 
-	if ref == nil || ref.GetType() == "" {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "object reference is required and must have a type")
+	if ref == nil || ref.GetCid() == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "object reference is required and must have a CID")
 	}
 
-	if ref.GetDigest() == "" {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "object reference must have a digest")
-	}
-
-	_, err := digest.Parse(ref.GetDigest())
-	if err != nil {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "invalid digest: %v", err)
-	}
-
-	ref, err = c.store.Lookup(ctx, ref)
+	_, err := c.store.Lookup(ctx, ref)
 	if err != nil {
 		st := status.Convert(err)
 
-		return nil, nil, status.Errorf(st.Code(), "failed to lookup object: %s", st.Message())
+		return nil, status.Errorf(st.Code(), "failed to lookup object: %s", st.Message())
 	}
 
-	if ref.GetSize() > 4*1024*1024 {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "object size exceeds maximum limit of 4MB")
-	}
-
-	if ref.GetType() != coretypes.ObjectType_OBJECT_TYPE_AGENT.String() {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "object type must be %s", coretypes.ObjectType_OBJECT_TYPE_AGENT.String())
-	}
-
-	reader, err := c.store.Pull(ctx, ref)
+	record, err := c.store.Pull(ctx, ref)
 	if err != nil {
 		st := status.Convert(err)
 
-		return nil, nil, status.Errorf(st.Code(), "failed to pull object: %s", st.Message())
+		return nil, status.Errorf(st.Code(), "failed to pull object: %s", st.Message())
 	}
 
-	agent := &coretypes.Agent{}
-
-	_, err = agent.LoadFromReader(reader)
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "failed to load agent from reader: %v", err)
-	}
-
-	return ref, agent, nil
+	return record, nil
 }

@@ -1,165 +1,186 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
-//nolint:mnd,wsl
 package client
 
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"encoding/base64"
-	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
-	"github.com/agntcy/dir/utils/cosign"
-	"github.com/sigstore/sigstore-go/pkg/bundle"
-	"github.com/sigstore/sigstore-go/pkg/root"
-	"github.com/sigstore/sigstore-go/pkg/tuf"
-	"github.com/sigstore/sigstore-go/pkg/util"
-	"github.com/sigstore/sigstore-go/pkg/verify"
-	"github.com/theupdateframework/go-tuf/v2/metadata/fetcher"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	signv1 "github.com/agntcy/dir/api/sign/v1"
+	storev1 "github.com/agntcy/dir/api/store/v1"
+	cosignutils "github.com/agntcy/dir/utils/cosign"
+	sigs "github.com/sigstore/cosign/v2/pkg/signature"
 )
 
-// Verify verifies the signature of the agent using OIDC.
-func (c *Client) VerifyOIDC(_ context.Context, expectedIssuer, expectedSigner string, agent *coretypes.Agent) error {
-	// Validate request.
-	if agent == nil {
-		return errors.New("agent must be set")
-	}
-	if agent.GetSignature() == nil {
-		return errors.New("agent has no signature")
-	}
-
-	// Extract signature data from the agent.
-	sigBundleRawJSON, err := base64.StdEncoding.DecodeString(agent.GetSignature().GetContentBundle())
+// Verify verifies the signature of the record.
+func (c *Client) Verify(ctx context.Context, req *signv1.VerifyRequest) (*signv1.VerifyResponse, error) {
+	// Server-side verification
+	response, err := c.SignServiceClient.Verify(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to decode signature: %w", err)
+		return nil, fmt.Errorf("server verification failed: %w", err)
 	}
 
-	sigBundle := &bundle.Bundle{}
-	if err := sigBundle.UnmarshalJSON(sigBundleRawJSON); err != nil {
-		return fmt.Errorf("failed to unmarshal signature bundle: %w", err)
+	if response.GetSuccess() {
+		return response, nil
 	}
 
-	// Get agent JSON data without the signature.
-	// We need to remove the signature from the agent before verifying.
-	agentSignature := agent.GetSignature()
-	agent.Signature = nil
+	// Fall back to client-side verification
+	logger.Info("Server verification failed, falling back to client-side verification")
 
-	agentJSON, err := json.Marshal(agent)
+	var errMsg string
+
+	verified, err := c.verifyClientSide(ctx, req.GetRecordRef().GetCid())
 	if err != nil {
-		return fmt.Errorf("failed to marshal agent: %w", err)
+		errMsg = err.Error()
 	}
 
-	agent.Signature = agentSignature
-
-	// Load identity verification options.
-	var identityPolicy verify.PolicyOption
-	{
-		// Create OIDC identity matcher for verification.
-		certID, err := verify.NewShortCertificateIdentity("", expectedIssuer, "", expectedSigner)
-		if err != nil {
-			return fmt.Errorf("failed to create certificate identity: %w", err)
-		}
-
-		identityPolicy = verify.WithCertificateIdentity(certID)
-	}
-
-	// Load trusted root material.
-	var trustedMaterial root.TrustedMaterialCollection
-	{
-		// Get staging TUF trusted root.
-		// TODO: allow switching between TUF environments.
-		fetcher := fetcher.NewDefaultFetcher()
-		fetcher.SetHTTPUserAgent(util.ConstructUserAgent())
-		tufOptions := &tuf.Options{
-			Root:              tuf.StagingRoot(),
-			RepositoryBaseURL: tuf.StagingMirror,
-			Fetcher:           fetcher,
-			DisableLocalCache: true, // read-only mode; prevent from pulling root CA to local dir
-		}
-		tufClient, err := tuf.New(tufOptions)
-		if err != nil {
-			return fmt.Errorf("failed to create TUF client: %w", err)
-		}
-
-		trustedRoot, err := root.GetTrustedRoot(tufClient)
-		if err != nil {
-			return fmt.Errorf("failed to get trusted root: %w", err)
-		}
-
-		trustedMaterial = append(trustedMaterial, trustedRoot)
-	}
-
-	// Create verifier session.
-	sev, err := verify.NewVerifier(trustedMaterial,
-		verify.WithSignedCertificateTimestamps(1),
-		verify.WithObserverTimestamps(1),
-		verify.WithTransparencyLog(1),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create verifier: %w", err)
-	}
-
-	// Run verification
-	_, err = sev.Verify(sigBundle, verify.NewPolicy(verify.WithArtifact(bytes.NewReader(agentJSON)), identityPolicy))
-	if err != nil {
-		return fmt.Errorf("failed to verify signature: %w", err)
-	}
-
-	// Verify the signature.
-	return nil
+	return &signv1.VerifyResponse{
+		Success:      verified,
+		ErrorMessage: &errMsg,
+	}, nil
 }
 
-func (c *Client) VerifyWithKey(_ context.Context, key []byte, agent *coretypes.Agent) error {
-	// Validate request.
-	if len(key) == 0 {
-		return errors.New("key must not be empty")
-	}
-	if agent == nil {
-		return errors.New("agent must be set")
-	}
-	if agent.GetSignature() == nil {
-		return errors.New("agent has no signature")
-	}
+// verifyClientSide performs client-side signature verification using OCI referrers.
+func (c *Client) verifyClientSide(ctx context.Context, recordCID string) (bool, error) {
+	logger.Debug("Starting client-side verification", "recordCID", recordCID)
 
-	// Extract signature data from the agent.
-	sigBundleRawJSON, err := base64.StdEncoding.DecodeString(agent.GetSignature().GetContentBundle())
+	// Generate the expected payload for this record CID
+	digest, err := corev1.ConvertCIDToDigest(recordCID)
 	if err != nil {
-		return fmt.Errorf("failed to decode signature: %w", err)
+		return false, fmt.Errorf("failed to convert CID to digest: %w", err)
 	}
 
-	sigBundle := &bundle.Bundle{}
-	if err := sigBundle.UnmarshalJSON(sigBundleRawJSON); err != nil {
-		return fmt.Errorf("failed to unmarshal signature bundle: %w", err)
+	expectedPayload, err := cosignutils.GeneratePayload(digest.String())
+	if err != nil {
+		return false, fmt.Errorf("failed to generate expected payload: %w", err)
 	}
 
-	// Get the public key from the signature bundle and compare it with the provided key.
-	sigBundleVerificationMaterial := sigBundle.VerificationMaterial
-	if sigBundleVerificationMaterial == nil {
-		return errors.New("signature bundle has no verification material")
-	}
-	pubKey := sigBundleVerificationMaterial.GetPublicKey()
-	if pubKey == nil {
-		return errors.New("signature bundle verification material has no public key")
+	// Retrieve signature from OCI referrers
+	signatures, err := c.pullSignatureReferrer(ctx, recordCID)
+	if err != nil {
+		return false, fmt.Errorf("failed to pull signature referrer: %w", err)
 	}
 
-	// Decode the PEM-encoded public key and generate the expected hint.
-	p, _ := pem.Decode(key)
-	if p == nil {
-		return errors.New("failed to decode PEM block containing public key")
-	}
-	if p.Type != "PUBLIC KEY" {
-		return fmt.Errorf("unexpected PEM type: %s", p.Type)
-	}
-	expectedHint := string(cosign.GenerateHintFromPublicKey(p.Bytes))
-
-	if pubKey.GetHint() != expectedHint {
-		return fmt.Errorf("public key hint mismatch: expected %s, got %s", expectedHint, pubKey.GetHint())
+	if len(signatures) == 0 {
+		return false, errors.New("no signature found in referrer responses")
 	}
 
-	return nil
+	// Retrieve public key from OCI referrers
+	publicKeys, err := c.pullPublicKeyReferrer(ctx, recordCID)
+	if err != nil {
+		return false, fmt.Errorf("failed to pull public key referrer: %w", err)
+	}
+
+	if len(publicKeys) == 0 {
+		return false, errors.New("no public key found in referrer responses")
+	}
+
+	// Compare all public keys with all signatures
+	for _, publicKey := range publicKeys {
+		for _, signature := range signatures {
+			// Verify signature using cosign
+			verifier, err := sigs.LoadPublicKeyRaw([]byte(publicKey), crypto.SHA256)
+			if err != nil {
+				// Skip this public key if it's invalid, try the next one
+				logger.Debug("Failed to load public key, skipping", "error", err)
+
+				continue
+			}
+
+			// Decode base64 signature if needed
+			signatureBytes, err := base64.StdEncoding.DecodeString(signature.GetSignature())
+			if err != nil {
+				// If decoding fails, assume it's already raw bytes
+				signatureBytes = []byte(signature.GetSignature())
+			}
+
+			// Verify signature against the expected payload
+			err = verifier.VerifySignature(bytes.NewReader(signatureBytes), bytes.NewReader(expectedPayload))
+			if err != nil {
+				// Verification failed for this combination, try the next one
+				logger.Debug("Signature verification failed, trying next combination", "error", err)
+
+				continue
+			}
+
+			// If the signature is verified against this public key, return true
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// pullSignatureReferrer retrieves the signature referrer for a record.
+func (c *Client) pullSignatureReferrer(ctx context.Context, recordCID string) ([]*signv1.Signature, error) {
+	signatureType := corev1.SignatureReferrerType
+
+	resultCh, err := c.PullReferrer(ctx, &storev1.PullReferrerRequest{
+		RecordRef: &corev1.RecordRef{
+			Cid: recordCID,
+		},
+		ReferrerType: &signatureType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to pull signature referrer: %w", err)
+	}
+
+	signatures := make([]*signv1.Signature, 0)
+
+	// Get all signature responses and decode them from referrer data
+	for response := range resultCh {
+		referrer := response.GetReferrer()
+		if referrer != nil {
+			signature := &signv1.Signature{}
+			if err := signature.UnmarshalReferrer(referrer); err != nil {
+				logger.Error("Failed to decode signature from referrer", "error", err)
+
+				continue
+			}
+
+			signatures = append(signatures, signature)
+		}
+	}
+
+	return signatures, nil
+}
+
+// pullPublicKeyReferrer retrieves the public key referrer for a record.
+func (c *Client) pullPublicKeyReferrer(ctx context.Context, recordCID string) ([]string, error) {
+	publicKeyType := corev1.PublicKeyReferrerType
+
+	resultCh, err := c.PullReferrer(ctx, &storev1.PullReferrerRequest{
+		RecordRef: &corev1.RecordRef{
+			Cid: recordCID,
+		},
+		ReferrerType: &publicKeyType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to pull public key referrer: %w", err)
+	}
+
+	publicKeys := make([]string, 0)
+
+	// Get all public key responses and extract the public key from referrer data
+	for response := range resultCh {
+		referrer := response.GetReferrer()
+		if referrer != nil {
+			publicKey := &signv1.PublicKey{}
+			if err := publicKey.UnmarshalReferrer(referrer); err != nil {
+				logger.Error("Failed to decode public key from referrer", "error", err)
+
+				continue
+			}
+
+			publicKeys = append(publicKeys, publicKey.GetKey())
+		}
+	}
+
+	return publicKeys, nil
 }

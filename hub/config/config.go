@@ -11,10 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	httpUtils "github.com/agntcy/dir/hub/utils/http"
-	"github.com/agntcy/dir/hub/utils/url"
+	urlutils "github.com/agntcy/dir/hub/utils/url"
 )
 
 var (
@@ -31,17 +32,23 @@ type AuthConfig struct {
 	IdpBackendAddress  string `json:"IAM_API"`
 	IdpFrontendAddress string `json:"IAM_UI"`
 	HubBackendAddress  string `json:"HUB_API"`
+	APIKeyClientID     string `json:"API_KEY_CLIENT_ID"`
 }
 
 // FetchAuthConfig retrieves and parses the AuthConfig from the given frontend URL.
 // It validates the URL, fetches the config.json, and normalizes backend addresses.
 // Returns the AuthConfig or an error if the operation fails.
-func FetchAuthConfig(ctx context.Context, frontedURL string) (*AuthConfig, error) {
-	if err := url.ValidateSecureURL(frontedURL); err != nil {
+func FetchAuthConfig(ctx context.Context, frontendURL string) (*AuthConfig, error) {
+	if err := urlutils.ValidateSecureURL(frontendURL); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidFrontendURL, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, frontedURL+"/config.json", nil)
+	configJSONURL, err := url.JoinPath(frontendURL, "config.json")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidFrontendURL, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, configJSONURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFetchingConfig, err)
 	}
@@ -75,12 +82,11 @@ func FetchAuthConfig(ctx context.Context, frontedURL string) (*AuthConfig, error
 	backendAddr = strings.TrimPrefix(backendAddr, "http://")
 	backendAddr = strings.TrimPrefix(backendAddr, "https://")
 	backendAddr = strings.TrimSuffix(backendAddr, "/")
-	backendAddr = strings.TrimSuffix(backendAddr, "/v1alpha1")
-	backendAddr = fmt.Sprintf("%s:%d", backendAddr, DefaultHubBackendGRPCPort)
 	authConfig.HubBackendAddress = backendAddr
 
 	idpBackendAddr := authConfig.IdpBackendAddress
 	idpBackendAddr = strings.TrimSuffix(idpBackendAddr, "/")
+	// FIXME: is this trim still necessary?
 	idpBackendAddr = strings.TrimSuffix(idpBackendAddr, "/v1alpha1")
 	authConfig.IdpBackendAddress = idpBackendAddr
 

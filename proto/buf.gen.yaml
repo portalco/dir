@@ -1,0 +1,54 @@
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+version: v2
+managed:
+  enabled: true
+  disable:
+    - module: buf.build/googleapis/googleapis
+  override:
+    # Map specific paths to desired Go packages
+    - path: agntcy/dir/core/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/core/v1
+    - path: agntcy/dir/routing/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/routing/v1
+    - path: agntcy/dir/search/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/search/v1
+    - path: agntcy/dir/sign/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/sign/v1
+    - path: agntcy/dir/store/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/store/v1
+    - path: agntcy/dir/events/v1
+      file_option: go_package
+      value: github.com/agntcy/dir/api/events/v1
+plugins:
+  # Stubs for Golang
+  - remote: buf.build/protocolbuffers/go:v1.36.5
+    out: ../api
+    opt:
+      - module=github.com/agntcy/dir/api
+  - remote: buf.build/grpc/go:v1.5.1
+    out: ../api
+    opt:
+      - module=github.com/agntcy/dir/api
+      - require_unimplemented_servers=false
+      - use_generic_streams_experimental=false
+
+  # Stubs for Python
+  - remote: buf.build/protocolbuffers/python:v32.1
+    out: ../sdk/dir-py/
+  - remote: buf.build/protocolbuffers/pyi:v27.4
+    out: ../sdk/dir-py/
+  - remote: buf.build/grpc/python:v1.75.1
+    out: ../sdk/dir-py/
+
+  # Stubs for Javascript/Typescript
+  - remote: buf.build/bufbuild/es:v2.9.0
+    out: ../sdk/dir-js/src/models/
+    opt:
+      - import_extension=js

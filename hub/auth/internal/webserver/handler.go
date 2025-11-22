@@ -18,8 +18,9 @@ const (
 
 // SessionStore holds the PKCE verifier and the resulting tokens from the OAuth flow.
 type SessionStore struct {
-	verifier string
-	Tokens   *okta.Token
+	Verifier  string
+	Challenge string
+	Tokens    *okta.Token
 }
 
 // Config contains the configuration for the local webserver and OAuth handler.
@@ -80,7 +81,8 @@ func (h *Handler) HandleRequestRedirect(w http.ResponseWriter, r *http.Request) 
 	requestID := r.URL.Query().Get("request")
 
 	var challenge string
-	h.sessionStore.verifier, challenge = utils.GenerateChallenge()
+
+	h.sessionStore.Verifier, challenge = utils.GenerateChallenge()
 
 	nonce, err := utils.GenerateNonce()
 	if err != nil {
@@ -105,10 +107,10 @@ func (h *Handler) HandleCodeRedirect(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.idpClient.RequestToken(&okta.RequestTokenRequest{
 		ClientID:    h.clientID,
 		RedirectURI: h.localWebserverURL,
-		Verifier:    h.sessionStore.verifier,
+		Verifier:    h.sessionStore.Verifier,
 		Code:        code,
 	})
-	if err != nil {
+	if err != nil { //nolint:wsl
 		h.handleError(w, err)
 
 		return
@@ -129,6 +131,7 @@ func (h *Handler) HandleCodeRedirect(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
 	w.Write([]byte(failedLoginMessage)) //nolint:errcheck
+
 	h.Err <- err
 }
 
@@ -136,5 +139,6 @@ func (h *Handler) handleError(w http.ResponseWriter, err error) {
 func (h *Handler) handleSuccess(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(successfulLoginMessage)) //nolint:errcheck
+
 	h.Err <- nil
 }

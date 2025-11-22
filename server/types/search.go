@@ -3,42 +3,18 @@
 
 package types
 
-type SkillObject interface {
-	GetID() uint64
-	GetName() string
-}
-
-type LocatorObject interface {
-	GetType() string
-	GetUrl() string
-}
-
-type ExtensionObject interface {
-	GetName() string
-	GetVersion() string
-}
-
-type RecordObject interface {
-	GetName() string
-	GetVersion() string
-	GetCID() string
-
-	GetSkillObjects() []SkillObject
-	GetLocatorObjects() []LocatorObject
-	GetExtensionObjects() []ExtensionObject
-}
-
 type RecordFilters struct {
-	Limit             int
-	Offset            int
-	Name              string
-	Version           string
-	SkillIDs          []uint64
-	SkillNames        []string
-	LocatorTypes      []string
-	LocatorURLs       []string
-	ExtensionNames    []string
-	ExtensionVersions []string
+	Limit        int
+	Offset       int
+	Name         string
+	Version      string
+	SkillIDs     []uint64
+	SkillNames   []string
+	LocatorTypes []string
+	LocatorURLs  []string
+	ModuleNames  []string
+	DomainIDs    []uint64
+	DomainNames  []string
 }
 
 type FilterOption func(*RecordFilters)
@@ -99,24 +75,23 @@ func WithLocatorURLs(urls ...string) FilterOption {
 	}
 }
 
-// WithExtensionNames RecordFilters records by extension names.
-func WithExtensionNames(names ...string) FilterOption {
+// WithModuleNames RecordFilters records by module names.
+func WithModuleNames(names ...string) FilterOption {
 	return func(sc *RecordFilters) {
-		sc.ExtensionNames = names
+		sc.ModuleNames = names
 	}
 }
 
-// WithExtensionVersions RecordFilters records by extension versions.
-func WithExtensionVersions(versions ...string) FilterOption {
+// WithDomainIDs filters records by domain IDs.
+func WithDomainIDs(ids ...uint64) FilterOption {
 	return func(sc *RecordFilters) {
-		sc.ExtensionVersions = versions
+		sc.DomainIDs = ids
 	}
 }
 
-type SearchAPI interface {
-	// AddRecord adds a new agent record to the search database.
-	AddRecord(record RecordObject) error
-
-	// GetRecords retrieves agent records based on the provided RecordFilters.
-	GetRecords(opts ...FilterOption) ([]RecordObject, error)
+// WithDomainNames filters records by domain names.
+func WithDomainNames(names ...string) FilterOption {
+	return func(sc *RecordFilters) {
+		sc.DomainNames = names
+	}
 }

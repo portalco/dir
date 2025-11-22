@@ -1,0 +1,13 @@
+[project]
+name = "dir-example"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = [
+    "agntcy-dir",
+]
+
+[[tool.uv.index]]
+url = "https://buf.build/gen/python"
+
+[tool.uv.sources]
+agntcy-dir = { path = "../../dir-py", editable = true }

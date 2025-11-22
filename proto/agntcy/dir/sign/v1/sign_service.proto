@@ -1,0 +1,85 @@
+// Copyright AGNTCY Contributors (https://github.com/agntcy)
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package agntcy.dir.sign.v1;
+
+import "agntcy/dir/core/v1/record.proto";
+import "agntcy/dir/sign/v1/signature.proto";
+
+// SignService provides methods to sign and verify records.
+service SignService {
+  // Sign record using keyless OIDC based provider or using PEM-encoded private key with an optional passphrase
+  rpc Sign(SignRequest) returns (SignResponse);
+
+  // Verify signed record using keyless OIDC based provider or using PEM-encoded formatted PEM public key encrypted
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+}
+
+message SignRequest {
+  // Record reference to be signed
+  core.v1.RecordRef record_ref = 1;
+
+  // Signing provider to use
+  SignRequestProvider provider = 2;
+}
+
+message SignRequestProvider {
+  oneof request {
+    // Sign with OIDC provider
+    SignWithOIDC oidc = 1;
+
+    // Sign with PEM-encoded public key
+    SignWithKey key = 2;
+  }
+}
+
+message SignWithOIDC {
+  // List of sign options for OIDC
+  message SignOpts {
+    // Fulcio authority access URL (default value: https://fulcio.sigstage.dev)
+    optional string fulcio_url = 1;
+
+    // Rekor validator access URL (default value: https://rekor.sigstage.dev)
+    optional string rekor_url = 2;
+
+    // Timestamp authority access URL (default value: https://timestamp.sigstage.dev/api/v1/timestamp)
+    optional string timestamp_url = 3;
+
+    // OIDC provider access URL (default value: https://oauth2.sigstage.dev/auth)
+    optional string oidc_provider_url = 4;
+  }
+
+  // Token for OIDC provider
+  string id_token = 1;
+
+  // Signing options for OIDC
+  SignOpts options = 2;
+}
+
+message SignWithKey {
+  // Private key used for signing
+  bytes private_key = 1;
+
+  // Password to unlock the private key
+  optional bytes password = 2;
+}
+
+message SignResponse {
+  // Cryptographic signature of the record
+  Signature signature = 1;
+}
+
+message VerifyRequest {
+  // Record reference to be verified
+  core.v1.RecordRef record_ref = 1;
+}
+
+message VerifyResponse {
+  // The verify process result
+  bool success = 1;
+  
+  // Optional error message if verification failed
+  optional string error_message = 2;
+}

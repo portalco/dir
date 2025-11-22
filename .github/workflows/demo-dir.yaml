@@ -1,0 +1,274 @@
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+name: Demo - DIR
+
+#  This workflow demonstrates how to use the Dir CLI with a Kind cluster and Helm chart.
+#  It can be run in either local mode or network mode.
+#  It includes steps for building, pushing, publishing, listing and pulling records.
+
+on:
+  workflow_dispatch:
+    inputs:
+      git-ref:
+        required: true
+        type: string
+        default: "main"
+        description: "Git branch, tag, or commit hash to build from"
+      network:
+        required: true
+        type: boolean
+        default: false
+        description: "Deploy in network mode"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.git-ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.25.2'
+
+      - name: Setup Taskfile
+        shell: bash
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+
+      - name: Build Dirctl
+        run: |
+          # Generate API code and compile CLI
+          task cli:compile
+          ls -la bin/
+
+      - name: Build Docker Images
+        run: |
+          # Build Docker images from source using commit SHA as tag
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG=${COMMIT_SHA} task build
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v.1.12.0
+        with:
+          version: v0.24.0
+          cluster_name: dir-demo
+          install_only: true
+
+      - name: Deploy Dir
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          if [ ${{ inputs.network }} = "true" ]; then
+            echo "Using network mode"
+            IMAGE_TAG=${COMMIT_SHA} task deploy:network
+            task deploy:network:port-forward
+          else
+            echo "Using local mode"
+            IMAGE_TAG=${COMMIT_SHA} task deploy:local
+            task deploy:local:port-forward
+          fi
+
+      - name: Run push command
+        run: |
+          if [ "${{ inputs.network }}" = "true" ]; then
+            echo "Running dir push command on Peer 1"
+            bin/dirctl push e2e/shared/testdata/record_070.json --server-addr 127.0.0.1:8890 > digest.txt
+          else
+            echo "Running dir push command"
+            bin/dirctl push e2e/shared/testdata/record_070.json > digest.txt
+          fi
+          echo "Pushed image digest:"
+          cat digest.txt
+
+      - name: Run publish command
+        run: |
+          
+          if [ "${{ inputs.network }}" = "true" ]; then
+            echo "Running dir publish command on Peer 1"
+            bin/dirctl publish $(cat digest.txt) --server-addr 127.0.0.1:8890
+            echo "Waiting for publish to complete"
+            sleep 120
+          else
+            echo "Running dir publish command"
+            bin/dirctl publish $(cat digest.txt)
+          fi
+
+      - name: Run list info command
+        continue-on-error: true
+        run: |
+          if [ "${{ inputs.network }}" = "true" ]; then
+            echo "Running dir list info command on Peer 1"
+            bin/dirctl list info --server-addr 127.0.0.1:8890
+            echo "Running dir list info command on Peer 2"
+            bin/dirctl list info --server-addr 127.0.0.1:8891
+            echo "Running dir list info command on Peer 3"
+            bin/dirctl list info --server-addr 127.0.0.1:8892
+          else
+            echo "Running dir list info command"
+            bin/dirctl list info
+          fi
+
+      - name: Run list search by skill command
+        continue-on-error: true
+        run: |
+          if [ "${{ inputs.network }}" = "true" ]; then
+            echo "Running dir list search by skill command on Peer 1"
+            bin/dirctl list "/skills/Natural Language Processing" --server-addr 127.0.0.1:8890
+            echo "Running dir list search by skill command on Peer 2"
+            bin/dirctl list "/skills/Natural Language Processing" --server-addr 127.0.0.1:8891
+            echo "Running dir list search by skill command on Peer 3"
+            bin/dirctl list "/skills/Natural Language Processing" --server-addr 127.0.0.1:8892
+          else
+            echo "Running dir list search by skill command"
+            bin/dirctl list "/skills/Natural Language Processing"
+          fi
+
+      - name: Run pull command
+        run: |
+          if [ "${{ inputs.network }}" = "true" ]; then
+            echo "Running dir pull command on Peer 1"
+            bin/dirctl pull $(cat digest.txt) --server-addr 127.0.0.1:8890
+          else
+            echo "Running dir pull command"
+            bin/dirctl pull $(cat digest.txt)
+          fi
+
+      - name: Clean up
+        run: |
+          echo "Cleaning up"
+          if [ "${{ inputs.network }}" = "true" ]; then
+            task deploy:network:port-forward:cleanup
+            task deploy:network:cleanup
+          else
+            task deploy:local:port-forward:cleanup
+            task deploy:local:cleanup
+          fi
+
+  sign-and-verify-with-oidc:
+      # This job demonstrates how to sign and verify a record using OIDC tokens.
+      # It requires the `id-token` permission to generate OIDC tokens.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.git-ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.25.2'
+
+      - name: Setup Taskfile
+        shell: bash
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+
+      - name: Build Dirctl
+        run: |
+          task cli:compile
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Get Github OIDC token
+        id: oidc-token
+        run: |
+          OIDC_TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r '.value')
+          echo "::add-mask::$OIDC_TOKEN"
+          echo "token=$OIDC_TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Build Docker Images
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG=${COMMIT_SHA} task build
+
+      - name: Deploy Dir
+        run: |
+          echo "Deploying Dir"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG=${COMMIT_SHA} task deploy:local
+          task deploy:local:port-forward
+
+      - name: Push record
+        run: |
+          echo "Pushing record"
+          bin/dirctl push e2e/shared/testdata/record_070.json > digest.txt
+
+      - name: Sign record
+        run: |
+          echo "Running dir sign command"
+          bin/dirctl sign $(cat digest.txt) \
+            --oidc-token ${{ steps.oidc-token.outputs.token }} \
+            --oidc-provider-url "https://token.actions.githubusercontent.com" \
+            --oidc-client-id "https://github.com/${{ github.repository }}/.github/workflows/demo.yaml@${{ github.ref }}"
+
+      - name: Run verify command
+        run: |
+          echo "Running dir verify command"
+          bin/dirctl verify $(cat digest.txt)
+
+  sign-and-verify-with-key:
+      # This job demonstrates how to sign and verify a record using Cosign keys.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.git-ref }}
+
+      - name: Setup Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.25.2'
+
+      - name: Setup Taskfile
+        shell: bash
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+
+      - name: Build Dirctl
+        run: |
+          task cli:compile
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Generate Cosign keys
+        run: |
+          echo "Generating Cosign keys"
+          cosign generate-key-pair
+          echo "Cosign keys generated successfully"
+
+      - name: Build Docker Images
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG=${COMMIT_SHA} task build
+
+      - name: Deploy Dir
+        run: |
+          echo "Deploying Dir"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE_TAG=${COMMIT_SHA} task deploy:local
+          task deploy:local:port-forward
+
+      - name: Push record
+        run: |
+          echo "Pushing record"
+          bin/dirctl push e2e/shared/testdata/record_070.json > digest.txt
+
+      - name: Sign record
+        run: |
+          echo "Running dir sign command"
+          bin/dirctl sign $(cat digest.txt) --key cosign.key
+
+      - name: Verify record
+        run: |
+          echo "Running dir verify command"
+          bin/dirctl verify $(cat digest.txt)

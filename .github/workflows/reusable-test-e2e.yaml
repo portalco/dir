@@ -1,7 +1,7 @@
 # Copyright AGNTCY Contributors (https://github.com/agntcy)
 # SPDX-License-Identifier: Apache-2.0
 
-name: Test
+name: Test E2E
 
 on:
   workflow_call:
@@ -14,39 +14,40 @@ on:
         required: true
         type: string
         description: 'Image tag to use.'
-      helm-version:
+      enable_coverage:
         required: false
-        default: "3.12.1"
-        type: string
-        description: 'Helm version'
-      # helm-ct-version:
-      #   required: false
-      #   default: "3.11.0"
-      #   type: string
-      #   description: 'Helm chart-testing version'
-      kind-version:
+        type: boolean
+        default: false
+        description: 'Whether to collect and upload E2E coverage to Codecov.'
+    secrets:
+      CODECOV_TOKEN:
+        description: "Codecov token for uploading coverage reports"
         required: false
-        default: "0.24.0"
-        type: string
-        description: 'Kind version'
-      taskfile-task:
-        required: false
-        default: "test:e2e"
-        type: string
-        description: 'Taskfile task to run'
 
 jobs:
-  test-e2e:
-    name: End-to-end
+  e2e:
+    name: Test ${{ matrix.label }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - task: test:e2e:local
+            label: "Local"
+            coverage-files: ".coverage/e2e/local-cli.out,.coverage/e2e/local-client.out,.coverage/e2e/server.out"
+          - task: test:e2e:network
+            label: "Network"
+            coverage-files: ".coverage/e2e/network.out,.coverage/e2e/server.out"
+          - task: test:e2e:spire
+            label: "Federation"
+            coverage-files: ".coverage/e2e/server.out"
     steps:
       - name: Checkout code
-        uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           fetch-depth: 0
 
       - name: Login to ghcr.io
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
         with:
           registry: ghcr.io
           username: notused
@@ -56,59 +57,44 @@ jobs:
         shell: bash
         run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
 
+      - name: Setup Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
-          go-version: '1.24.1'
+          go-version: '1.25.2'
           check-latest: true
           cache-dependency-path: "**/*.sum"
 
-      #
-      # Install kubernetes tools
-      #
-      - name: Setup Helm
-        uses: azure/setup-helm@fe7b79cd5ee1e45176fcad797de68ecaf3ca4814 # v4.2.0
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          version: ${{ inputs.helm-version }}
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-e2e-${{ runner.os }}-${{ matrix.task }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-e2e-${{ runner.os }}-${{ matrix.task }}-
+            go-e2e-${{ runner.os }}-
+            go-${{ runner.os }}-
 
-      # - name: Set up Helm chart-testing
-      #   uses: helm/chart-testing-action@e6669bcd63d7cb57cb4380c33043eebe5d111992 # v2.6.1
-      #   with:
-      #     version: ${{ inputs.helm-ct-version }}
-
-      - name: Setup kind
-        uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
-        with:
-          version: v${{ inputs.kind-version }}
-          install_only: true
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@3e0aec4d80787158d308d7b364cb1b702e7feb7f # v4.0.0
-
-      #
-      # Setup cluster
-      #
-      - name: Setup Kind cluster
-        shell: bash
+      - name: Compile CLI
         run: |
-          # Create cluster config
-          KIND_CONFIG_FILE=$(mktemp -p /tmp)
-          cat <<EOF > $KIND_CONFIG_FILE
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          networking:
-            apiServerAddress: "127.0.0.1"
-            apiServerPort: 6443
-          EOF
-
-          # Create cluster
-          kind create cluster --config $KIND_CONFIG_FILE --name kind
-          kubectl cluster-info
+          task cli:compile
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4.1.9
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: tmp/artifacts
+          merge-multiple: true
+
+      - name: Download coverage image artifacts
+        if: ${{ inputs.enable_coverage }}
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          path: tmp/coverage-artifacts
+          pattern: '*-coverage'
           merge-multiple: true
 
       - name: Load images to local Docker registry
@@ -118,26 +104,37 @@ jobs:
           done
           docker images
 
-      - name: Compile CLI
-        if: ${{ inputs.taskfile-task == 'test:e2e:network' }}
+      - name: Load coverage images to local Docker registry
+        if: ${{ inputs.enable_coverage }}
         run: |
-          task cli:compile
+          for image_archive in tmp/coverage-artifacts/*.tar; do
+            docker load --input "$image_archive"
+          done
+          docker images
 
       - name: Run end-to-end tests
         env:
           IMAGE_REPO: ${{ inputs.image_repo }}
           IMAGE_TAG: ${{ inputs.image_tag }}
           E2E_COMPILE_OUTPUT_DIR: tmp
+          E2E_COVERAGE_ENABLED: ${{ matrix.task != 'test:e2e:spire' && inputs.enable_coverage && 'true' || 'false' }}
         run: |
-          task ${{ inputs.taskfile-task }}
+          # Use a random cluster name to avoid conflicts in concurrent runs.
+          # Kind cluster names must be lowercase and can contain only letters and numbers.
+          export KIND_CLUSTER_NAME=test-$(openssl rand -base64 12 | tr -dc 'a-z0-9')
+          task ${{ matrix.task }}
 
-      # - name: Export agent model
-      #   id: export
-      #   run: |
-      #     echo "## Agent Model" >> $GITHUB_STEP_SUMMARY
+      - name: Process E2E coverage
+        if: ${{ inputs.enable_coverage && matrix.task != 'test:e2e:spire' }}
+        run: |
+          task test:e2e:coverage:process
 
-      #     # Export agent model
-      #     echo "**Agent model**"
-      #     echo '```json' >> $GITHUB_STEP_SUMMARY
-      #     cat e2e/tmp/agent.json >> $GITHUB_STEP_SUMMARY
-      #     echo '```' >> $GITHUB_STEP_SUMMARY
+      - name: Upload E2E coverage to Codecov
+        if: ${{ inputs.enable_coverage && matrix.task != 'test:e2e:spire' }}
+        uses: codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7 # v5.5.1
+        with:
+          files: ${{ matrix.coverage-files }}
+          flags: e2e-${{ matrix.label }}
+          fail_ci_if_error: false
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}

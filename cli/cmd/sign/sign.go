@@ -1,20 +1,21 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
+//nolint:wrapcheck
 package sign
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	signv1 "github.com/agntcy/dir/api/sign/v1"
 	"github.com/agntcy/dir/cli/presenter"
-	agentUtils "github.com/agntcy/dir/cli/util/agent"
 	ctxUtils "github.com/agntcy/dir/cli/util/context"
+	"github.com/agntcy/dir/client"
 	"github.com/agntcy/dir/utils/cosign"
 	"github.com/sigstore/sigstore/pkg/oauthflow"
 	"github.com/spf13/cobra"
@@ -22,65 +23,68 @@ import (
 
 var Command = &cobra.Command{
 	Use:   "sign",
-	Short: "Sign agent model using identity-based OIDC signing",
-	Long: `This command signs the agent data model using identity-based signing.
+	Short: "Sign record using identity-based OIDC or key-based signing",
+	Long: `This command signs the record using identity-based signing.
 It uses a short-lived signing certificate issued by Sigstore Fulcio
 along with a local ephemeral signing key and OIDC identity.
 
-Verification data is attached to the signed agent model,
+Verification data is attached to the signed record,
 and the transparency log is pushed to Sigstore Rekor.
 
-This command opens a browser window to authenticate the user 
+This command opens a browser window to authenticate the user
 with the default OIDC provider.
 
 Usage examples:
 
-1. Sign an agent model from file:
+1. Sign a record using OIDC:
 
-	dirctl sign agent.json
+	dirctl sign <record-cid>
 
-2. Sign an agent model from standard input:
+2. Sign a record using key:
 
-	cat agent.json | dirctl sign --stdin
+	dirctl sign <record-cid> --key <key-file>
 
+3. Output formats:
+
+	# Get signing result as JSON
+	dirctl sign <record-cid> --output json
+	
+	# Sign with key and JSON output
+	dirctl sign <record-cid> --key <key-file> --output json
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var fpath string
+		var recordCID string
 		if len(args) > 1 {
-			return errors.New("only one file path is allowed")
+			return errors.New("only one record CID is allowed")
 		} else if len(args) == 1 {
-			fpath = args[0]
+			recordCID = args[0]
+		} else {
+			return errors.New("record CID is required")
 		}
 
-		// get source
-		source, err := agentUtils.GetReader(fpath, opts.FromStdin)
-		if err != nil {
-			return err //nolint:wrapcheck
-		}
-
-		return runCommand(cmd, source)
+		return runCommand(cmd, recordCID)
 	},
 }
 
-func runCommand(cmd *cobra.Command, source io.ReadCloser) error {
+func runCommand(cmd *cobra.Command, recordCID string) error {
 	// Get the client from the context
 	c, ok := ctxUtils.GetClientFromContext(cmd.Context())
 	if !ok {
 		return errors.New("failed to get client from context")
 	}
 
-	// Load into an Agent struct
-	agent := &coretypes.Agent{}
-	if _, err := agent.LoadFromReader(source); err != nil {
-		return fmt.Errorf("failed to load agent: %w", err)
+	err := Sign(cmd.Context(), c, recordCID)
+	if err != nil {
+		return fmt.Errorf("failed to sign record: %w", err)
 	}
 
-	var err error
+	// Output in the appropriate format
+	return presenter.PrintMessage(cmd, "signature", "Record is", "signed")
+}
 
-	var agentSigned *coretypes.Agent
-
-	//nolint:nestif,gocritic
-	if opts.Key != "" {
+func Sign(ctx context.Context, c *client.Client, recordCID string) error {
+	switch {
+	case opts.Key != "":
 		// Load the key from file
 		rawKey, err := os.ReadFile(filepath.Clean(opts.Key))
 		if err != nil {
@@ -93,38 +97,76 @@ func runCommand(cmd *cobra.Command, source io.ReadCloser) error {
 			return fmt.Errorf("failed to read password: %w", err)
 		}
 
-		// Sign the agent using the provided key
-		agentSigned, err = c.SignWithKey(cmd.Context(), rawKey, pw, agent)
-		if err != nil {
-			return fmt.Errorf("failed to sign agent with key: %w", err)
+		req := &signv1.SignRequest{
+			RecordRef: &corev1.RecordRef{Cid: recordCID},
+			Provider: &signv1.SignRequestProvider{
+				Request: &signv1.SignRequestProvider_Key{
+					Key: &signv1.SignWithKey{
+						PrivateKey: rawKey,
+						Password:   pw,
+					},
+				},
+			},
 		}
-	} else if opts.OIDCToken != "" {
-		// Sign the agent using the OIDC provider
-		agentSigned, err = c.SignOIDC(cmd.Context(), agent, opts.OIDCToken, opts.SignOpts)
+
+		// Sign the record using the provided key
+		_, err = c.SignWithKey(ctx, req)
 		if err != nil {
-			return fmt.Errorf("failed to sign agent: %w", err)
+			return fmt.Errorf("failed to sign record with key: %w", err)
 		}
-	} else {
+	case opts.OIDCToken != "":
+		req := &signv1.SignRequest{
+			RecordRef: &corev1.RecordRef{Cid: recordCID},
+			Provider: &signv1.SignRequestProvider{
+				Request: &signv1.SignRequestProvider_Oidc{
+					Oidc: &signv1.SignWithOIDC{
+						IdToken: opts.OIDCToken,
+						Options: &signv1.SignWithOIDC_SignOpts{
+							FulcioUrl:       &opts.FulcioURL,
+							RekorUrl:        &opts.RekorURL,
+							TimestampUrl:    &opts.TimestampURL,
+							OidcProviderUrl: &opts.OIDCProviderURL,
+						},
+					},
+				},
+			},
+		}
+
+		// Sign the record using the OIDC provider
+		_, err := c.SignWithOIDC(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to sign record: %w", err)
+		}
+	default:
 		// Retrieve the token from the OIDC provider
 		token, err := oauthflow.OIDConnect(opts.OIDCProviderURL, opts.OIDCClientID, "", "", oauthflow.DefaultIDTokenGetter)
 		if err != nil {
 			return fmt.Errorf("failed to get OIDC token: %w", err)
 		}
 
-		// Sign the agent using the OIDC provider
-		agentSigned, err = c.SignOIDC(cmd.Context(), agent, token.RawString, opts.SignOpts)
+		req := &signv1.SignRequest{
+			RecordRef: &corev1.RecordRef{Cid: recordCID},
+			Provider: &signv1.SignRequestProvider{
+				Request: &signv1.SignRequestProvider_Oidc{
+					Oidc: &signv1.SignWithOIDC{
+						IdToken: token.RawString,
+						Options: &signv1.SignWithOIDC_SignOpts{
+							FulcioUrl:       &opts.FulcioURL,
+							RekorUrl:        &opts.RekorURL,
+							TimestampUrl:    &opts.TimestampURL,
+							OidcProviderUrl: &opts.OIDCProviderURL,
+						},
+					},
+				},
+			},
+		}
+
+		// Sign the record using the OIDC provider
+		_, err = c.SignWithOIDC(ctx, req)
 		if err != nil {
-			return fmt.Errorf("failed to sign agent: %w", err)
+			return fmt.Errorf("failed to sign record: %w", err)
 		}
 	}
-
-	// Print signed agent
-	signedAgentJSON, err := json.MarshalIndent(agentSigned, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal agent: %w", err)
-	}
-
-	presenter.Print(cmd, string(signedAgentJSON))
 
 	return nil
 }

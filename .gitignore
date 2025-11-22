@@ -12,21 +12,35 @@ bin/
 
 # Python
 __pycache__/
+*.egg-info
 
 # JS
 node_modules
 
 # Helm
 install/charts/dir/charts/
+install/charts/dirctl/charts/
 
 # MacOS
 .DS_Store
 
 # Test output
 e2e/tmp/*
-agent_model.json
+
+# Coverage output
+.coverage/
 
 # Licensei
 .licensei.cache
 
 tmp/
+
+# AI
+.cursor/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# MCP server binary
+mcp/mcp-server

@@ -5,29 +5,30 @@
 package routing
 
 import (
-	"bytes"
-	"encoding/json"
 	"testing"
 	"time"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
+	typesv1alpha0 "buf.build/gen/go/agntcy/oasf/protocolbuffers/go/agntcy/oasf/types/v1alpha0"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	"github.com/ipfs/go-cid"
 	"github.com/stretchr/testify/assert"
 )
 
 // Testing 2 nodes, A -> B
-// stores and announces an agent.
+// stores and announces an record.
 // A discovers it retrieves the key metadata from B.
 func TestHandler(t *testing.T) {
 	// Test data
-	testAgent := &coretypes.Agent{
-		Skills: []*coretypes.Skill{
+	testRecord := corev1.New(&typesv1alpha0.Record{
+		Name: "test-handler-agent",
+		Skills: []*typesv1alpha0.Skill{
 			{CategoryName: toPtr("category1"), ClassName: toPtr("class1")},
 		},
-		Locators: []*coretypes.Locator{
+		Locators: []*typesv1alpha0.Locator{
 			{Type: "type1", Url: "url1"},
 		},
-	}
-	testRef := getObjectRef(testAgent)
+	})
+	testRef := &corev1.RecordRef{Cid: testRecord.GetCid()}
 
 	// create demo network
 	firstNode := newTestServer(t, t.Context(), nil)
@@ -39,17 +40,16 @@ func TestHandler(t *testing.T) {
 	<-secondNode.remote.server.DHT().RefreshRoutingTable()
 
 	// publish the key on second node and wait on the first
-	digestCID, err := testRef.GetCID()
+	cidStr := testRef.GetCid()
+	decodedCID, err := cid.Decode(cidStr)
 	assert.NoError(t, err)
 
 	// push the data
-	data, err := json.Marshal(testAgent)
-	assert.NoError(t, err)
-	_, err = secondNode.remote.storeAPI.Push(t.Context(), testRef, bytes.NewReader(data))
+	_, err = secondNode.remote.storeAPI.Push(t.Context(), testRecord)
 	assert.NoError(t, err)
 
 	// announce the key
-	err = secondNode.remote.server.DHT().Provide(t.Context(), digestCID, true)
+	err = secondNode.remote.server.DHT().Provide(t.Context(), decodedCID, true)
 	assert.NoError(t, err)
 
 	// wait for sync
@@ -60,7 +60,7 @@ func TestHandler(t *testing.T) {
 	// check on first
 	found := false
 
-	peerCh := firstNode.remote.server.DHT().FindProvidersAsync(t.Context(), digestCID, 1)
+	peerCh := firstNode.remote.server.DHT().FindProvidersAsync(t.Context(), decodedCID, 1)
 	for peer := range peerCh {
 		if peer.ID == secondNode.remote.server.Host().ID() {
 			found = true

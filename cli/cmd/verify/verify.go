@@ -1,95 +1,80 @@
 // Copyright AGNTCY Contributors (https://github.com/agntcy)
 // SPDX-License-Identifier: Apache-2.0
 
+//nolint:wrapcheck
 package verify
 
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	signv1 "github.com/agntcy/dir/api/sign/v1"
 	"github.com/agntcy/dir/cli/presenter"
-	agentUtils "github.com/agntcy/dir/cli/util/agent"
 	ctxUtils "github.com/agntcy/dir/cli/util/context"
 	"github.com/spf13/cobra"
 )
 
+func init() {
+	// Add output format flags
+	presenter.AddOutputFlags(Command)
+}
+
+//nolint:mnd
 var Command = &cobra.Command{
 	Use:   "verify",
-	Short: "Verify agent model signature against identity-based OIDC signing",
-	Long: `This command verifies the agent data model signature against
-identity-based OIDC signing process. 
-It relies on Sigstore Rekor for signature verification.
+	Short: "Verify record signature against identity-based OIDC or key-based signing",
+	Long: `This command verifies the record signature against
+identity-based OIDC or key-based signing process.
 
 Usage examples:
 
-1. Verify an agent model from file:
+1. Verify a record signature:
 
-	dirctl verify agent.json
+	dirctl verify <record-cid>
 
-2. Verify an agent model from standard input:
+2. Output formats:
 
-	dirctl pull <digest> | dirctl verify --stdin
-
+	# Get verification result as JSON
+	dirctl verify <record-cid> --output json
+	
+	# Get raw verification status for scripting
+	dirctl verify <record-cid> --output raw
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var path string
+		var recordRef string
 		if len(args) > 1 {
-			return errors.New("only one file path is allowed")
+			return errors.New("one argument is allowed")
 		} else if len(args) == 1 {
-			path = args[0]
+			recordRef = args[0]
 		}
 
-		// get source
-		source, err := agentUtils.GetReader(path, opts.FromStdin)
-		if err != nil {
-			return err //nolint:wrapcheck
-		}
-
-		return runCommand(cmd, source)
+		return runCommand(cmd, recordRef)
 	},
 }
 
 // nolint:mnd
-func runCommand(cmd *cobra.Command, source io.ReadCloser) error {
+func runCommand(cmd *cobra.Command, recordRef string) error {
 	// Get the client from the context
 	c, ok := ctxUtils.GetClientFromContext(cmd.Context())
 	if !ok {
 		return errors.New("failed to get client from context")
 	}
 
-	// Load into an Agent struct
-	agent := &coretypes.Agent{}
-	if _, err := agent.LoadFromReader(source); err != nil {
-		return fmt.Errorf("failed to load agent: %w", err)
+	response, err := c.Verify(cmd.Context(), &signv1.VerifyRequest{
+		RecordRef: &corev1.RecordRef{
+			Cid: recordRef,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to verify record with Zot: %w", err)
 	}
 
-	//nolint:nestif
-	if opts.Key != "" {
-		// Load the public key from file
-		rawPubKey, err := os.ReadFile(filepath.Clean(opts.Key))
-		if err != nil {
-			return fmt.Errorf("failed to read key file: %w", err)
-		}
-
-		// Verify the agent using the provided key
-		err = c.VerifyWithKey(cmd.Context(), rawPubKey, agent)
-		if err != nil {
-			return fmt.Errorf("failed to verify agent: %w", err)
-		}
-	} else {
-		// Verify the agent using the OIDC provider
-		err := c.VerifyOIDC(cmd.Context(), opts.OIDCIssuer, opts.OIDCIdentity, agent)
-		if err != nil {
-			return fmt.Errorf("failed to verify agent: %w", err)
-		}
+	// Output in the appropriate format
+	status := "trusted"
+	if !response.GetSuccess() {
+		status = "not trusted"
 	}
 
-	// Print success message
-	presenter.Print(cmd, "Agent signature verified successfully!")
-
-	return nil
+	return presenter.PrintMessage(cmd, "signature", "Record signature is", status)
 }

@@ -8,7 +8,13 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Logging configuration
 log_level: INFO
+log_format: text # Options: "text" (development) or "json" (production)
+grpc_logging_verbose: false # Options: false (production - logs start/finish only) or true (verbose - includes payloads)
+
+# Enable coverage volume (emptyDir persists across container restarts)
+coverageVolume: false
 
 image:
   repository: ghcr.io/agntcy/dir-apiserver
@@ -16,40 +22,64 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
+# Server configuration
 config:
   # listen_address: "0.0.0.0:8888"
-   # healthcheck_address: "0.0.0.0:8889"
 
-  provider: "oci"
+  # Authentication settings (handles identity verification)
+  # Supports both X.509 (X.509-SVID) and JWT (JWT-SVID) authentication
+  authn:
+    # Enable authentication
+    enabled: false
+    # Authentication mode: "x509" or "jwt"
+    # - x509: Uses X.509-SVID from mutual TLS peer certificates
+    # - jwt: Uses JWT-SVID from Authorization header
+    mode: "x509"
+    # SPIFFE Workload API socket path (injected by SPIRE agent)
+    socket_path: "unix:///run/spire/agent-sockets/api.sock"
+    # Expected audiences for JWT validation (only used in JWT mode)
+    audiences:
+      - "spiffe://example.org/dir-server"
 
-  # OCI-backed store
-  oci:
-    # Path to a local directory that will be to hold data instead of remote.
-    # If this is set to non-empty value, only local store will be used.
-    # local_dir: ""
+  # Authorization settings (handles access control policies)
+  # Requires authentication to be enabled first
+  authz:
+    # Enable authorization policies
+    enabled: false
+    # Trust domain for this Directory server
+    # Used to distinguish internal (same trust domain) vs external requests
+    trust_domain: "example.org"
 
-    # Cache directory to use for metadata.
-    # cache_dir: ""
+  # Store settings for the storage backend.
+  store:
+    # Storage provider to use.
+    provider: "oci"
 
-    # Registry address to connect to
-    registry_address: "dir-zot.default.svc.cluster.local:5000"
-    # All data will be stored under this repo.
-    # Objects are pushed as tags, manifests, and blobs.
-    # repository_name: ""
+    # OCI-backed store
+    oci:
+      # Path to a local directory that will be to hold data instead of remote.
+      # If this is set to non-empty value, only local store will be used.
+      # local_dir: ""
 
-    # Auth credentials to use.
-    auth_config:
-      insecure: "true"
-      access_token: access-token
-      refresh_token: refresh-token
+      # Cache directory to use for metadata.
+      # cache_dir: ""
 
-  # localfs:
-  #   dir: ""
+      # Registry address to connect to
+      registry_address: "dir-zot.dir-server.svc.cluster.local:5000"
+      # All data will be stored under this repo.
+      # Objects are pushed as tags, manifests, and blobs.
+      # repository_name: ""
+
+      # Auth credentials to use.
+      auth_config:
+        insecure: "true"
+        access_token: access-token
+        refresh_token: refresh-token
 
   # Routing settings for the peer-to-peer network.
-  routing: {}
+  routing:
     # Address to use for routing
-    # listen_address: "/ipv4/0.0.0.0/tcp/5555"
+    # listen_address: "/ip4/0.0.0.0/tcp/5555"
 
     # Path to private key file for peer ID.
     # key_path: /tmp/agntcy-dir/node.privkey
@@ -61,19 +91,221 @@ config:
     #   - /ip4/1.1.1.1/tcp/1
     #   - /ip4/1.1.1.1/tcp/2
 
-    # Datastore to use for routing persistance.
-    # datastore_dir: ""
+    # GossipSub configuration for efficient label announcements
+    # When enabled, labels are propagated via GossipSub mesh to ALL subscribed peers
+    # When disabled, falls back to DHT+Pull mechanism (higher bandwidth, limited reach)
+    # Default: true (recommended for production)
+    gossipsub:
+      enabled: true
 
-# create PVC for routing/cache data
+  # Sync configuration
+  sync:
+    # How frequently the scheduler checks for pending syncs
+    scheduler_interval: "30s"
+
+    # Maximum number of sync workers running concurrently
+    worker_count: 1
+
+    # Timeout for individual sync operations
+    worker_timeout: "10m"
+
+    # Registry monitor configuration
+    registry_monitor:
+      check_interval: "30s"
+
+    # Authentication configuration for sync operations
+    auth_config: {}
+
+  # Events configuration
+  events:
+    # Channel buffer size per subscriber
+    # Larger buffers allow subscribers to fall behind temporarily without dropping events
+    # Default: 100
+    subscriber_buffer_size: 100
+
+    # Enable logging when events are dropped due to slow consumers
+    # Default: true
+    log_slow_consumers: true
+
+    # Enable debug logging of all published events (verbose in production)
+    # Default: false
+    log_published_events: false
+
+  # Publication configuration
+  publication:
+    # How frequently the scheduler checks for pending publications
+    scheduler_interval: "1h"
+
+    # Maximum number of publication workers running concurrently
+    worker_count: 1
+
+    # Timeout for individual publication operations
+    worker_timeout: "30m"
+
+  # gRPC Connection Management configuration
+  # Protects server from resource exhaustion, zombie connections, and memory exhaustion
+  # Production-safe defaults are applied automatically - customization is optional
+  # Note: These settings can only be configured via Helm values (no environment variables)
+  connection:
+    # Connection limits
+    # max_concurrent_streams: 1000    # Maximum concurrent gRPC streams per connection (default: 1000)
+    # max_recv_msg_size: 4194304      # Maximum message size for receiving in bytes - 4MB (default: 4MB)
+    # max_send_msg_size: 4194304      # Maximum message size for sending in bytes - 4MB (default: 4MB)
+    # connection_timeout: 120s        # Timeout for establishing new connections (default: 120s)
+
+    # Keepalive configuration - detects dead connections and prevents resource leaks
+    # keepalive:
+    #   max_connection_idle: 15m      # Close connections idle for this duration (default: 15m)
+    #   max_connection_age: 30m       # Close connections after this age to rotate (default: 30m)
+    #   max_connection_age_grace: 5m  # Grace period for in-flight RPCs before closing aged connections (default: 5m)
+    #   time: 5m                      # Send keepalive pings every N duration (default: 5m)
+    #   timeout: 1m                   # Close connection if ping not acknowledged within timeout (default: 1m)
+    #   min_time: 1m                  # Minimum time between client pings (prevents abuse) (default: 1m)
+    #   permit_without_stream: true   # Allow keepalive pings without active streams (default: true)
+
+    # Example: High-traffic production configuration
+    # connection:
+    #   max_concurrent_streams: 2000
+    #   max_recv_msg_size: 8388608    # 8MB for larger records
+    #   max_send_msg_size: 8388608    # 8MB for larger records
+    #   connection_timeout: 60s
+    #   keepalive:
+    #     max_connection_idle: 10m
+    #     max_connection_age: 20m
+    #     max_connection_age_grace: 3m
+    #     time: 3m
+    #     timeout: 30s
+    #     min_time: 30s
+    #     permit_without_stream: false
+
+  # Rate limiting configuration
+  # Protects the server from abuse and resource exhaustion using token bucket algorithm
+  ratelimit:
+    # Enable rate limiting middleware
+    # Default: false (disabled for development/testing)
+    enabled: false
+
+    # Global rate limit (applies to all requests regardless of client)
+    # Set both to 0 to disable global limiting
+    # global_rps: 0       # Requests per second (float, e.g., 1000.0)
+    # global_burst: 0     # Burst capacity (int, e.g., 2000)
+
+    # Per-client rate limit (tracked by SPIFFE ID from mTLS)
+    # Default values shown below are reasonable for production
+    # Set both to 0 to disable per-client limiting
+    per_client_rps: 100 # Requests per second per client (float)
+    per_client_burst: 200 # Burst capacity per client (int)
+
+    # Per-method rate limit overrides (optional)
+    # Allows fine-grained control over specific gRPC methods
+    # Note: These can only be configured via Helm values, not environment variables
+    # method_limits:
+    #   "/agntcy.dir.store.v1.StoreService/CreateRecord":
+    #     rps: 50      # Lower limit for expensive operations
+    #     burst: 100
+    #   "/agntcy.dir.store.v1.StoreService/PullRecord":
+    #     rps: 200     # Higher limit for read operations
+    #     burst: 400
+
+# SPIRE configuration
+spire:
+  enabled: false
+  trustDomain: example.org
+  
+  # Custom DNS names to add to the X.509-SVID certificate SANs
+  # Useful for external access with proper TLS verification without --tls-skip-verify
+  # Example:
+  # dnsNameTemplates:
+  #   - "dir-api.example.com"
+  #   - "api.example.com"
+  dnsNameTemplates: []
+  
+  federation: []
+    # # Config: https://github.com/spiffe/spire-controller-manager/blob/main/docs/clusterfederatedtrustdomain-crd.md
+    # - trustDomain: dir-cluster
+    #   bundleEndpointURL: https://0.0.0.0:8081
+    #   bundleEndpointProfile:
+    #     type: https_web
+
+# Create PVC for routing/cache data
 pvc:
   create: false
   storageClassName: standard
   size: 1G
 
-# service exposes gRPC server api
+# Database configuration
+database:
+  # Database type (currently only sqlite supported)
+  type: "sqlite"
+  
+  # SQLite configuration
+  sqlite:
+    # Path to SQLite database file
+    # Default: /tmp/dir.db (ephemeral - lost on pod restart)
+    # When using PVC: /var/lib/dir/database/dir.db (persistent)
+    dbPath: "/tmp/dir.db"
+  
+  # PVC for database persistence (optional)
+  # When enabled, database persists across pod restarts
+  # Also allows enabling readOnlyRootFilesystem security hardening
+  pvc:
+    enabled: false        # Disabled by default (opt-in for backward compatibility)
+    create: true          # Create PVC automatically
+    storageClassName: ""  # Use cluster default storage class
+    size: 1Gi             # Database size (adjust based on expected record count)
+    accessMode: ReadWriteOnce
+
+# Service exposes gRPC server api
 service:
   type: ClusterIP
   port: 8888
+
+# Routing service exposes P2P networking (separate from API service)
+routingService:
+  # Service type for routing/P2P traffic
+  # Options: ClusterIP, NodePort, LoadBalancer
+  # Default: NodePort (works everywhere - local Kind and cloud)
+  # For production cloud: override to LoadBalancer for stable external IP
+  type: NodePort
+
+  # Cloud provider for automatic annotation configuration
+  # Options: "aws", "gcp", "azure", or leave empty for manual configuration
+  # When set, provider-specific annotations are automatically applied
+  cloudProvider: ""
+
+  # AWS-specific configuration (only used when cloudProvider: "aws")
+  aws:
+    # Use internal load balancer (default: false = internet-facing)
+    internal: false
+    # NLB target type: "instance" or "ip" (default: instance)
+    # nlbTargetType: "instance"
+
+  # GCP-specific configuration (only used when cloudProvider: "gcp")
+  gcp:
+    # Use internal load balancer (default: false = external)
+    internal: false
+    # Optional: BackendConfig name for advanced configuration
+    # backendConfig: ""
+
+  # Azure-specific configuration (only used when cloudProvider: "azure")
+  azure:
+    # Use internal load balancer (default: false = public)
+    internal: false
+    # Optional: Resource group for load balancer
+    # resourceGroup: ""
+
+  # Optional: Specify a static IP (must be reserved in cloud provider first)
+  # loadBalancerIP: ""
+
+  # Optional: Preserve client source IPs (recommended for P2P)
+  externalTrafficPolicy: Local
+
+  # Optional: Fixed NodePort (only used when type is NodePort)
+  # nodePort: 30555
+
+  # Optional: Additional custom annotations (merged with provider annotations)
+  # Custom annotations take precedence over provider-generated ones
+  annotations: {}
 
 serviceAccount:
   # Specifies whether a service account should be created
@@ -149,3 +381,81 @@ extraVolumeMounts: []
   # Example:
   # - name: datastore
   #   mountPath: /etc/datastore
+
+# Extra environment variables for the apiserver container
+extraEnv: []
+# - name: SSL_CERT_DIR
+#   value: "/etc/ca-certs"
+# - name: GOCOVERDIR
+#   value: /tmp/coverage
+
+revisionHistoryLimit: 2
+
+# Secrets configuration
+# Choose ONE of two methods:
+# 1. Helm-managed secrets (secrets.*) - credentials in values.yaml
+# 2. ExternalSecrets (externalSecrets.*) - credentials synced from Vault
+#
+# Method 1: Helm-managed secrets (default)
+# Sensitive credentials are stored in Kubernetes secrets and injected as environment variables
+secrets:
+  # Private key for peer-to-peer routing identity
+  # If not provided, the secret will not include this key
+  privKey: ""
+
+  # Sync authentication credentials
+  # Used for authenticating sync operations between nodes
+  # Username defaults to "sync" if empty, password is randomly generated if empty
+  syncAuth:
+    username: ""
+    password: ""
+
+  # OCI (Open Container Initiative) registry authentication
+  # Used for authenticating to the OCI-backed storage backend
+  # Username defaults to "admin" if empty, password is randomly generated if empty
+  ociAuth:
+    username: ""
+    password: ""
+
+# Method 2: ExternalSecrets configuration
+# Syncs credentials from HashiCorp Vault (or other secret providers) using External Secrets Operator
+# When enabled, the Helm-managed secret (above) is NOT created
+externalSecrets:
+  # Enable ExternalSecrets integration (default: false)
+  # When true, credentials are synced from Vault instead of using values.yaml
+  enabled: false
+  
+  # Vault path where credentials are stored (all credentials in one path)
+  # Example: "dir_staging/dev/credentials"
+  vaultPath: ""
+  
+  # ClusterSecretStore or SecretStore name to use
+  # This must be pre-configured in your cluster (managed by platform team)
+  secretStore: "vault-backend"
+  
+  # Secret store kind (default: ClusterSecretStore)
+  # Options: ClusterSecretStore (cluster-wide) or SecretStore (namespace-scoped)
+  secretStoreKind: "ClusterSecretStore"
+  
+  # Refresh interval - how often ESO syncs from Vault (default: 1h)
+  refreshInterval: "1h"
+  
+  # Node identity configuration
+  nodeIdentity:
+    enabled: true
+    # Property name in Vault secret (default: "node.privkey")
+    property: "node.privkey"
+  
+  # OCI registry authentication
+  ociAuth:
+    enabled: true
+    # Property names in Vault secret (defaults shown)
+    usernameProperty: "oci-username"
+    passwordProperty: "oci-password"
+  
+  # Sync authentication (shared with remote nodes)
+  syncAuth:
+    enabled: true
+    # Property names in Vault secret (defaults shown)
+    usernameProperty: "sync-username"
+    passwordProperty: "sync-password"

@@ -1,31 +1,59 @@
-# Agent Directory
+# Directory
 
-The Agent Directory (dir) allows publication, exchange, and discovery of information about AI agents over a distributed peer-to-peer network.
-It leverages [OASF](https://github.com/agntcy/oasf) to describe agents and provides a set of APIs and tools to build, store, publish, and discover agents across the network by their attributes and constraints.
+![GitHub Release (latest by date)](https://img.shields.io/github/v/release/agntcy/dir)
+[![CI](https://github.com/agntcy/dir/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/agntcy/dir/actions/workflows/ci.yaml)
+[![Coverage](https://codecov.io/gh/agntcy/dir/branch/main/graph/badge.svg)](https://codecov.io/gh/agntcy/dir)
+[![License](https://img.shields.io/github/license/agntcy/dir)](./LICENSE.md)
+
+[Buf Registry](https://buf.build/agntcy/dir) | 
+[MCP Server](./mcp) | 
+[Go SDK](https://pkg.go.dev/github.com/agntcy/dir/client) | 
+[Python SDK](https://pypi.org/project/agntcy-dir/) | 
+[JavaScript SDK](https://www.npmjs.com/package/agntcy-dir) | 
+[GitHub Actions](https://github.com/agntcy/dir/tree/main/.github/actions/setup-dirctl) | 
+
+The Directory (dir) allows publication, exchange, and discovery of information about records over a distributed peer-to-peer network.
+It leverages [OASF](https://github.com/agntcy/oasf) to describe AI agents and provides a set of APIs and tools to store, publish, and discover records across the network by their attributes and constraints.
 Directory also leverages [CSIT](https://github.com/agntcy/csit) for continuous system integration and testing across different versions, environments, and features.
 
 ## Features
 
-- **Data Models** - Defines a standard schema for data representation and exchange.
-- **Dev Kit** - Provides CLI tooling to simplify development workflows and facilitate API interactions.
-- **Plugins** - Pluggable components to extend the build process of agent data models for custom use cases.
-- **Announce** - Allows publication of agent data models to the network.
-- **Discover** - Listen, search, and retrieve agents across the network by their attributes and constraints.
-- **Security** - Relies on well-known security principles to provide data provenance, integrity, and ownership.
+ADS enables several key capabilities for the agentic AI ecosystem:
 
-## Usage
+- **Capability-Based Discovery**: Agents publish structured metadata describing their
+functional characteristics as described by the [OASF](https://github.com/agntcy/oasf).
+The system organizes this information using hierarchical taxonomies,
+enabling efficient matching of capabilities to requirements.
+- **Verifiable Claims**: While agent capabilities are often subjectively evaluated,
+ADS provides cryptographic mechanisms for data integrity and provenance tracking.
+This allows users to make informed decisions about agent selection.
+- **Semantic Linkage**: Components can be securely linked to create various relationships
+like version histories for evolutionary development, collaborative partnerships where
+complementary skills solve complex problems, and dependency chains for composite agent workflows.
+- **Distributed Architecture**: Built on proven distributed systems principles,
+ADS uses content-addressing for global uniqueness and implements distributed hash tables (DHT)
+for scalable content discovery and synchronization across decentralized networks.
+- **Tooling and Integration**: Provides a suite of command-line tools, SDKs, and APIs
+to facilitate interaction with the system, enabling developers to manage Directory
+records and node operations programmatically.
+- **Security and Trust**: Incorporates robust security measures including
+cryptographic signing, verification of claims, secure communication protocols, and access controls
+to ensure the integrity and authenticity of Directory records and nodes.
 
-Check the [USAGE](USAGE.md) file for a full walkthrough of all the Directory features.
+## Documentation
+
+Check the [Documentation](https://docs.agntcy.org/dir/overview/) for a full walkthrough of all the Directory features.
 
 ## Source tree
 
-- [api](./api) - gRPC specification for data models and services
+- [proto](./proto) - gRPC specification for data models and services
+- [api](./api) - API models for tools and packages
 - [cli](./cli) - command line client for interacting with system components
-  - [builder](./cli/builder) - common data model build tools and plugins
 - [client](./client) - client SDK for development and API workflows
 - [e2e](./e2e) - end-to-end testing framework
 - [docs](./docs) - research details and documentation around the project
 - [server](./server) - API services to manage storage, routing, and networking operations
+- [sdk](./sdk) - client SDK implementations in different languages for development
 
 ## Prerequisites
 
@@ -84,8 +112,8 @@ It is not advised to use artifacts with mismatched versions.
 All container images are distributed via [GitHub Packages](https://github.com/orgs/agntcy/packages?repo_name=dir).
 
 ```bash
-docker pull ghcr.io/agntcy/dir-ctl:v0.2.0
-docker pull ghcr.io/agntcy/dir-apiserver:v0.2.0
+docker pull ghcr.io/agntcy/dir-ctl:v0.5.0
+docker pull ghcr.io/agntcy/dir-apiserver:v0.5.0
 ```
 
 ### Helm charts
@@ -93,16 +121,20 @@ docker pull ghcr.io/agntcy/dir-apiserver:v0.2.0
 All helm charts are distributed as OCI artifacts via [GitHub Packages](https://github.com/agntcy/dir/pkgs/container/dir%2Fhelm-charts%2Fdir).
 
 ```bash
-helm pull oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.2.0
+helm pull oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.5.0
 ```
 
 ### Binaries
 
-All release binaries are distributed via [GitHub Releases](https://github.com/agntcy/dir/releases).
+All release binaries are distributed via [GitHub Releases](https://github.com/agntcy/dir/releases) and [Homebrew](./HomebrewFormula/) `agntcy/dir` tap.
 
 ### SDKs
 
-- **Golang** - [github.com/agntcy/dir/api](https://pkg.go.dev/github.com/agntcy/dir/api), [github.com/agntcy/dir/cli](https://pkg.go.dev/github.com/agntcy/dir/cli), [github.com/agntcy/dir/server](https://pkg.go.dev/github.com/agntcy/dir/server)
+- **Golang** - [pkg.go.dev/github.com/agntcy/dir/client](https://pkg.go.dev/github.com/agntcy/dir/client) - [github.com/agntcy/dir/client](https://github.com/agntcy/dir/tree/main/client)
+
+- **Python** - [pypi.org/agntcy-dir](https://pypi.org/project/agntcy-dir/) - [github.com/agntcy/dir/sdk/dir-py](https://github.com/agntcy/dir/tree/main/sdk/dir-py)
+
+- **JavaScript** - [npmjs.com/agntcy-dir](https://www.npmjs.com/package/agntcy-dir) - [github.com/agntcy/dir/sdk/dir-js](https://github.com/agntcy/dir/tree/main/sdk/dir-js)
 
 ## Deployment
 
@@ -121,8 +153,8 @@ task server:start
 This will deploy Directory services into an existing Kubernetes cluster.
 
 ```bash
-helm pull oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.2.0
-helm upgrade --install dir oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.2.0
+helm pull oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.5.0
+helm upgrade --install dir oci://ghcr.io/agntcy/dir/helm-charts/dir --version v0.5.0
 ```
 
 ### Using Docker Compose
@@ -132,13 +164,6 @@ This will deploy Directory services using Docker Compose:
 ```bash
 cd install/docker
 docker compose up -d
-```
-
-To use an OCI store instead of local filesystem store, update the value of `DIRECTORY_SERVER_PROVIDER` in install/docker/apiserver.env to `oci`, then deploy with:
-
-```bash
-cd install/docker
-docker compose --profile oci up -d
 ```
 
 ## Copyright Notice

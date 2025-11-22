@@ -1,7 +1,7 @@
 # Copyright AGNTCY Contributors (https://github.com/agntcy)
 # SPDX-License-Identifier: Apache-2.0
 
-name: Validate PR
+name: PR
 
 on:
   pull_request_target:
@@ -13,54 +13,40 @@ on:
 
 permissions:
   pull-requests: write
+  contents: read
 
 jobs:
-  validate:
-    name: Validate PR
+  validate_pr_title:
+    name: Validate PR Title
+    uses: ./.github/workflows/lint-pr-title.yaml
+
+  label:
+    name: Label
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@0723387faaf9b38adef4775cd42cfd5155ed6017 # v5.5.3
-        id: lint_pr_title
-        env:
+      - uses: codelytv/pr-size-labeler@4ec67706cd878fbc1c8db0a5dcd28b6bb412e85a # v1.10.3
+        with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          requireScope: false
-          ignoreLabels: |
-            ignore-semantic-pr
-          types: |
-            BREAKING
-            build
-            chore
-            ci
-            docs
-            feat
-            fix
-            perf
-            refactor
-            revert
-            style
-            test
-            release
-
-      # Leave a comment if linter reports an error
-      - uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
-        if: always() && (steps.lint_pr_title.outputs.error_message != null)
-        with:
-          header: pr-title-lint-error
-          message: |
-            Hey there and thank you for opening this pull request! 👋🏼
-            
-            We require pull request titles to follow the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/) and it looks like your proposed title needs to be adjusted.
-
-            Details:
-            
-            ```
-            ${{ steps.lint_pr_title.outputs.error_message }}
-            ```
-
-      # Hide error message if the PR title has been fixed
-      - if: ${{ steps.lint_pr_title.outputs.error_message == null }}
-        uses: marocchino/sticky-pull-request-comment@52423e01640425a022ef5fd42c6fb5f633a02728 # v2.9.1
-        with:
-          header: pr-title-lint-error
-          delete: true
+          xs_label: 'size/XS'
+          xs_max_size: '50'
+          s_label: 'size/S'
+          s_max_size: '200'
+          m_label: 'size/M'
+          m_max_size: '1000'
+          l_label: 'size/L'
+          l_max_size: '2000'
+          xl_label: 'size/XL'
+          fail_if_xl: 'false'
+          message_if_xl: >
+            This PR exceeds the recommended size of 2000 lines.
+            Please make sure you are NOT addressing multiple issues with one PR.
+            Note that this PR might take longer to review due to large size.
+          files_to_ignore: |
+            "*.md"
+            "**/*.pb.go"
+            "**/*_pb2.py"
+            "**/*_pb2_grpc.py"
+            "**/*_pb.js"
+            "**/*_pb.d.ts"
+            "**/go.sum"
+            "**/go.mod"

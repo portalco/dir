@@ -5,121 +5,126 @@
 package routing
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
-	coretypes "github.com/agntcy/dir/api/core/v1alpha1"
-	routingtypes "github.com/agntcy/dir/api/routing/v1alpha1"
+	typesv1alpha0 "buf.build/gen/go/agntcy/oasf/protocolbuffers/go/agntcy/oasf/types/v1alpha0"
+	corev1 "github.com/agntcy/dir/api/core/v1"
+	routingv1 "github.com/agntcy/dir/api/routing/v1"
 	"github.com/agntcy/dir/server/datastore"
 	"github.com/agntcy/dir/server/types"
+	"github.com/agntcy/dir/server/types/adapters"
 	"github.com/agntcy/dir/utils/logging"
 	ipfsdatastore "github.com/ipfs/go-datastore"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestPublish_InvalidObject(t *testing.T) {
-	r := &routeLocal{}
+const testPeerID = "test-peer-id"
 
-	t.Run("Invalid object", func(t *testing.T) {
-		err := r.Publish(t.Context(), &coretypes.Object{
-			Ref:   nil,
-			Agent: nil,
-		}, true)
+func TestPublish_InvalidObject(t *testing.T) {
+	r := &routeLocal{localPeerID: testPeerID}
+
+	t.Run("nil record", func(t *testing.T) {
+		err := r.Publish(t.Context(), nil)
 
 		assert.Error(t, err)
-		assert.ErrorContains(t, err, "invalid object reference")
+		assert.ErrorContains(t, err, "record is required")
+	})
+
+	t.Run("record with no CID", func(t *testing.T) {
+		record := &corev1.Record{}
+		adapter := adapters.NewRecordAdapter(record)
+		err := r.Publish(t.Context(), adapter)
+
+		assert.Error(t, err)
+		assert.ErrorContains(t, err, "record has no CID")
 	})
 }
 
 type mockStore struct {
-	data map[string]*coretypes.Object
+	data map[string]*corev1.Record
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
-		data: make(map[string]*coretypes.Object),
+		data: make(map[string]*corev1.Record),
 	}
 }
 
-func (m *mockStore) Push(_ context.Context, ref *coretypes.ObjectRef, contents io.Reader) (*coretypes.ObjectRef, error) {
-	b, err := io.ReadAll(contents)
-	if err != nil {
-		return nil, err //nolint:wrapcheck
+func (m *mockStore) Push(_ context.Context, record *corev1.Record) (*corev1.RecordRef, error) {
+	cid := record.GetCid()
+	if cid == "" {
+		return nil, errors.New("record CID is required")
 	}
 
-	m.data[ref.GetDigest()] = &coretypes.Object{
-		Ref:   ref,
-		Agent: &coretypes.Agent{},
-		Data:  b,
-	}
+	m.data[cid] = record
 
-	return ref, nil
+	return &corev1.RecordRef{Cid: cid}, nil
 }
 
-func (m *mockStore) Lookup(_ context.Context, ref *coretypes.ObjectRef) (*coretypes.ObjectRef, error) {
-	if obj, exists := m.data[ref.GetDigest()]; exists {
-		return obj.GetRef(), nil
+func (m *mockStore) Lookup(_ context.Context, ref *corev1.RecordRef) (*corev1.RecordMeta, error) {
+	if _, exists := m.data[ref.GetCid()]; exists {
+		return &corev1.RecordMeta{
+			Cid: ref.GetCid(),
+		}, nil
 	}
 
 	return nil, errors.New("test object not found")
 }
 
-func (m *mockStore) Pull(_ context.Context, ref *coretypes.ObjectRef) (io.ReadCloser, error) {
-	if obj, exists := m.data[ref.GetDigest()]; exists {
-		return io.NopCloser(bytes.NewReader(obj.GetData())), nil
+func (m *mockStore) Pull(_ context.Context, ref *corev1.RecordRef) (*corev1.Record, error) {
+	if record, exists := m.data[ref.GetCid()]; exists {
+		return record, nil
 	}
 
 	return nil, errors.New("test object not found")
 }
 
-func (m *mockStore) Delete(_ context.Context, ref *coretypes.ObjectRef) error {
-	delete(m.data, ref.GetDigest())
+func (m *mockStore) Delete(_ context.Context, ref *corev1.RecordRef) error {
+	delete(m.data, ref.GetCid())
 
 	return nil
 }
 
+func (m *mockStore) IsReady(_ context.Context) bool {
+	return true
+}
+
 func TestPublishList_ValidSingleSkillQuery(t *testing.T) {
 	var (
-		testAgent = &coretypes.Agent{
-			Skills: []*coretypes.Skill{
+		testRecord = corev1.New(&typesv1alpha0.Record{
+			Name:          "test-agent-1",
+			SchemaVersion: "v0.3.1",
+			Skills: []*typesv1alpha0.Skill{
 				{CategoryName: toPtr("category1"), ClassName: toPtr("class1")},
 			},
-		}
-		testAgent2 = &coretypes.Agent{
-			Skills: []*coretypes.Skill{
+		})
+		testRecord2 = corev1.New(&typesv1alpha0.Record{
+			Name:          "test-agent-2",
+			SchemaVersion: "v0.3.1",
+			Skills: []*typesv1alpha0.Skill{
 				{CategoryName: toPtr("category1"), ClassName: toPtr("class1")},
 				{CategoryName: toPtr("category2"), ClassName: toPtr("class2")},
 			},
-		}
+		})
 
-		testRef  = getObjectRef(testAgent)
-		testRef2 = getObjectRef(testAgent2)
+		testRef  = &corev1.RecordRef{Cid: testRecord.GetCid()}
+		testRef2 = &corev1.RecordRef{Cid: testRecord2.GetCid()}
 
-		validQueriesWithExpectedObjectRef = map[string][]*coretypes.ObjectRef{
+		validQueriesWithExpectedObjectRef = map[string][]*corev1.RecordRef{
 			// tests exact lookup for skills
 			"/skills/category1/class1": {
-				{
-					Type:   coretypes.ObjectType_OBJECT_TYPE_AGENT.String(),
-					Digest: testRef.GetDigest(),
-				},
-				{
-					Type:   coretypes.ObjectType_OBJECT_TYPE_AGENT.String(),
-					Digest: testRef2.GetDigest(),
-				},
+				{Cid: testRef.GetCid()},
+				{Cid: testRef2.GetCid()},
 			},
 			// tests prefix based-lookup for skills
 			"/skills/category2": {
-				{
-					Type:   coretypes.ObjectType_OBJECT_TYPE_AGENT.String(),
-					Digest: testRef2.GetDigest(),
-				},
+				{Cid: testRef2.GetCid()},
 			},
 		}
 	)
@@ -136,43 +141,43 @@ func TestPublishList_ValidSingleSkillQuery(t *testing.T) {
 	mockstore := newMockStore()
 	r.local.store = mockstore
 
-	agentData, err := json.Marshal(testAgent)
+	_, err := r.local.store.Push(t.Context(), testRecord)
 	assert.NoError(t, err)
 
-	_, err = r.local.store.Push(t.Context(), testRef, bytes.NewReader(agentData))
+	_, err = r.local.store.Push(t.Context(), testRecord2)
 	assert.NoError(t, err)
 
-	agentData2, err := json.Marshal(testAgent2)
+	// Publish first record
+	adapter := adapters.NewRecordAdapter(testRecord)
+	err = r.Publish(t.Context(), adapter)
 	assert.NoError(t, err)
 
-	_, err = r.local.store.Push(t.Context(), testRef2, bytes.NewReader(agentData2))
-	assert.NoError(t, err)
-
-	// Publish first agent
-	err = r.Publish(t.Context(), &coretypes.Object{
-		Ref:   testRef,
-		Agent: testAgent,
-	}, false)
-	assert.NoError(t, err)
-
-	// Publish second agent
-	err = r.Publish(t.Context(), &coretypes.Object{
-		Ref:   testRef2,
-		Agent: testAgent2,
-	}, false)
+	// Publish second record
+	adapter2 := adapters.NewRecordAdapter(testRecord2)
+	err = r.Publish(t.Context(), adapter2)
 	assert.NoError(t, err)
 
 	for k, v := range validQueriesWithExpectedObjectRef {
 		t.Run("Valid query: "+k, func(t *testing.T) {
+			// Convert label to RecordQuery
+			var queries []*routingv1.RecordQuery
+
+			if strings.HasPrefix(k, "/skills/") {
+				skillName := strings.TrimPrefix(k, "/skills/")
+				queries = append(queries, &routingv1.RecordQuery{
+					Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+					Value: skillName,
+				})
+			}
+
 			// list
-			refsChan, err := r.List(t.Context(), &routingtypes.ListRequest{
-				Network: toPtr(false),
-				Labels:  []string{k},
+			refsChan, err := r.List(t.Context(), &routingv1.ListRequest{
+				Queries: queries,
 			})
 			assert.NoError(t, err)
 
 			// Collect items from the channel
-			var refs []*routingtypes.ListResponse_Item
+			var refs []*routingv1.ListResponse
 			for ref := range refsChan {
 				refs = append(refs, ref)
 			}
@@ -185,34 +190,36 @@ func TestPublishList_ValidSingleSkillQuery(t *testing.T) {
 				found := false
 
 				for _, ref := range refs {
-					if ref.GetRecord().GetDigest() == expectedRef.GetDigest() {
+					if ref.GetRecordRef().GetCid() == expectedRef.GetCid() {
 						found = true
 
 						break
 					}
 				}
 
-				assert.True(t, found, "Expected ref not found: %s", expectedRef.GetDigest())
+				assert.True(t, found, "Expected ref not found: %s", expectedRef.GetCid())
 			}
 		})
 	}
 
-	// Unpublish second agent
-	err = r.Unpublish(t.Context(), &coretypes.Object{
-		Ref:   testRef2,
-		Agent: testAgent2,
-	}, false)
+	// Unpublish second record
+	adapterUnpub := adapters.NewRecordAdapter(testRecord2)
+	err = r.Unpublish(t.Context(), adapterUnpub)
 	assert.NoError(t, err)
 
-	// Try to list second agent
-	refsChan, err := r.List(t.Context(), &routingtypes.ListRequest{
-		Network: toPtr(false),
-		Labels:  []string{"/skills/category2"},
+	// Try to list second record using RecordQuery
+	refsChan, err := r.List(t.Context(), &routingv1.ListRequest{
+		Queries: []*routingv1.RecordQuery{
+			{
+				Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+				Value: "category2",
+			},
+		},
 	})
 	assert.NoError(t, err)
 
 	// Collect items from the channel
-	var refs []*routingtypes.ListResponse_Item //nolint:prealloc
+	var refs []*routingv1.ListResponse //nolint:prealloc
 	for ref := range refsChan {
 		refs = append(refs, ref)
 	}
@@ -224,14 +231,15 @@ func TestPublishList_ValidSingleSkillQuery(t *testing.T) {
 func TestPublishList_ValidMultiSkillQuery(t *testing.T) {
 	// Test data
 	var (
-		testAgent = &coretypes.Agent{
-			Skills: []*coretypes.Skill{
+		testRecord = corev1.New(&typesv1alpha0.Record{
+			Name:          "test-agent-multi",
+			SchemaVersion: "v0.3.1",
+			Skills: []*typesv1alpha0.Skill{
 				{CategoryName: toPtr("category1"), ClassName: toPtr("class1")},
 				{CategoryName: toPtr("category2"), ClassName: toPtr("class2")},
 			},
-		}
-
-		testRef = getObjectRef(testAgent)
+		})
+		testRef = &corev1.RecordRef{Cid: testRecord.GetCid()}
 	)
 
 	// create demo network
@@ -246,29 +254,32 @@ func TestPublishList_ValidMultiSkillQuery(t *testing.T) {
 	mockstore := newMockStore()
 	r.local.store = mockstore
 
-	agentData, err := json.Marshal(testAgent)
+	_, err := r.local.store.Push(t.Context(), testRecord)
 	assert.NoError(t, err)
 
-	_, err = r.local.store.Push(t.Context(), testRef, bytes.NewReader(agentData))
-	assert.NoError(t, err)
-
-	// Publish first agent
-	err = r.Publish(t.Context(), &coretypes.Object{
-		Ref:   testRef,
-		Agent: testAgent,
-	}, true)
+	// Publish first record
+	adapter := adapters.NewRecordAdapter(testRecord)
+	err = r.Publish(t.Context(), adapter)
 	assert.NoError(t, err)
 
 	t.Run("Valid multi skill query", func(t *testing.T) {
-		// list
-		refsChan, err := r.List(t.Context(), &routingtypes.ListRequest{
-			Network: toPtr(false),
-			Labels:  []string{"/skills/category1/class1", "/skills/category2/class2"},
+		// list with multiple RecordQueries (AND logic)
+		refsChan, err := r.List(t.Context(), &routingv1.ListRequest{
+			Queries: []*routingv1.RecordQuery{
+				{
+					Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+					Value: "category1/class1",
+				},
+				{
+					Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+					Value: "category2/class2",
+				},
+			},
 		})
 		assert.NoError(t, err)
 
 		// Collect items from the channel
-		var refs []*routingtypes.ListResponse_Item
+		var refs []*routingv1.ListResponse
 		for ref := range refsChan {
 			refs = append(refs, ref)
 		}
@@ -277,7 +288,7 @@ func TestPublishList_ValidMultiSkillQuery(t *testing.T) {
 		assert.Len(t, refs, 1)
 
 		// check if expected ref is present
-		assert.Equal(t, testRef.GetDigest(), refs[0].GetRecord().GetDigest())
+		assert.Equal(t, testRef.GetCid(), refs[0].GetRecordRef().GetCid())
 	})
 }
 
@@ -316,56 +327,69 @@ func Benchmark_RouteLocal(b *testing.B) {
 	store := newMockStore()
 	badgerDatastore := newBadgerDatastore(b)
 	inMemoryDatastore := newInMemoryDatastore(b)
-	localLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	localLogger = slog.New(slog.DiscardHandler)
 
-	badgerRouter := newLocal(store, badgerDatastore)
-	inMemoryRouter := newLocal(store, inMemoryDatastore)
+	badgerRouter := newLocal(store, badgerDatastore, testPeerID)
+	inMemoryRouter := newLocal(store, inMemoryDatastore, testPeerID)
 
-	agent := &coretypes.Agent{
-		Skills: []*coretypes.Skill{
+	record := corev1.New(&typesv1alpha0.Record{
+		Name:          "bench-agent",
+		SchemaVersion: "v0.3.1",
+		Skills: []*typesv1alpha0.Skill{
 			{CategoryName: toPtr("category1"), ClassName: toPtr("class1")},
 		},
-	}
-	ref := getObjectRef(agent)
-	object := &coretypes.Object{Ref: ref, Agent: agent}
+	})
 
-	agentData, err := json.Marshal(agent)
-	assert.NoError(b, err)
-
-	_, err = store.Push(b.Context(), ref, bytes.NewReader(agentData))
+	_, err := store.Push(b.Context(), record)
 	assert.NoError(b, err)
 
 	b.Run("Badger DB Publish and Unpublish", func(b *testing.B) {
+		adapter := adapters.NewRecordAdapter(record)
 		for b.Loop() {
-			_ = badgerRouter.Publish(b.Context(), object, false)
-			err := badgerRouter.Unpublish(b.Context(), object)
+			_ = badgerRouter.Publish(b.Context(), adapter)
+			err := badgerRouter.Unpublish(b.Context(), adapter)
 			assert.NoError(b, err)
 		}
 	})
 
 	b.Run("Badger DB List", func(b *testing.B) {
-		_ = badgerRouter.Publish(b.Context(), object, false)
+		adapter := adapters.NewRecordAdapter(record)
+
+		_ = badgerRouter.Publish(b.Context(), adapter)
 		for b.Loop() {
-			_, err := badgerRouter.List(b.Context(), &routingtypes.ListRequest{
-				Labels: []string{"/skills/category1/class1"},
+			_, err := badgerRouter.List(b.Context(), &routingv1.ListRequest{
+				Queries: []*routingv1.RecordQuery{
+					{
+						Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+						Value: "category1/class1",
+					},
+				},
 			})
 			assert.NoError(b, err)
 		}
 	})
 
 	b.Run("In memory DB Publish and Unpublish", func(b *testing.B) {
+		adapter := adapters.NewRecordAdapter(record)
 		for b.Loop() {
-			_ = inMemoryRouter.Publish(b.Context(), object, false)
-			err := inMemoryRouter.Unpublish(b.Context(), object)
+			_ = inMemoryRouter.Publish(b.Context(), adapter)
+			err := inMemoryRouter.Unpublish(b.Context(), adapter)
 			assert.NoError(b, err)
 		}
 	})
 
 	b.Run("In memory DB List", func(b *testing.B) {
-		_ = inMemoryRouter.Publish(b.Context(), object, false)
+		adapter := adapters.NewRecordAdapter(record)
+
+		_ = inMemoryRouter.Publish(b.Context(), adapter)
 		for b.Loop() {
-			_, err := inMemoryRouter.List(b.Context(), &routingtypes.ListRequest{
-				Labels: []string{"/skills/category1/class1"},
+			_, err := inMemoryRouter.List(b.Context(), &routingv1.ListRequest{
+				Queries: []*routingv1.RecordQuery{
+					{
+						Type:  routingv1.RecordQueryType_RECORD_QUERY_TYPE_SKILL,
+						Value: "category1/class1",
+					},
+				},
 			})
 			assert.NoError(b, err)
 		}
