@@ -4,7 +4,7 @@ This document describes Directory API interfaces and usage scenarios.
 The API specification is defined and exposed via gRPC services.
 All code snippets below are tested against the Directory `v0.2.0` release.
 
-## Models
+## Models gi
 
 Defines all objects used to define schema and API specification.
 
